@@ -22,6 +22,7 @@ endif()
 add_library(flycore STATIC
   src/core/Connectome.cpp
   src/core/LIFNetwork.cpp
+  src/core/DataPath.cpp
   src/core/NeuronNames.cpp
 )
 target_include_directories(flycore PUBLIC src)

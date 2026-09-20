@@ -60,10 +60,12 @@ public:
 
     // Outgoing connections of one neuron.
     std::span<const std::uint32_t> targetsOf(std::uint32_t i) const {
-        return col_.subspan(rowStart_[i], rowStart_[i + 1] - rowStart_[i]);
+        return col_.subspan(static_cast<std::size_t>(rowStart_[i]),
+                            static_cast<std::size_t>(rowStart_[i + 1] - rowStart_[i]));
     }
     std::span<const std::uint16_t> weightsOf(std::uint32_t i) const {
-        return weight_.subspan(rowStart_[i], rowStart_[i + 1] - rowStart_[i]);
+        return weight_.subspan(static_cast<std::size_t>(rowStart_[i]),
+                               static_cast<std::size_t>(rowStart_[i + 1] - rowStart_[i]));
     }
 
     const Vec3& bboxMin() const { return bboxMin_; }

@@ -62,6 +62,10 @@ well described in the literature and you can check the simulation against it.
 ./build/Release/flyviz --stim-type L2        # drive the lamina instead
 ```
 
+Both programs locate `cns.bin` by searching upward from the working directory
+and from their own location, so they run from anywhere in the tree -- including
+double-clicked from a file manager -- without needing `--data`.
+
 | | |
 |---|---|
 | left drag | orbit |

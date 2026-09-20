@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "core/Connectome.h"
+#include "core/DataPath.h"
 #include "core/LIFNetwork.h"
 #include "core/NeuronNames.h"
 
@@ -95,6 +96,7 @@ int main(int argc, char** argv) {
     }
 
     try {
+        dataDir = fly::findDataDir(dataDir, argv[0]);
         const auto conn = fly::Connectome::load(dataDir + "/cns.bin");
         bool haveNames = false;
         const auto names = fly::NeuronNames::load(dataDir + "/cns_names.tsv",

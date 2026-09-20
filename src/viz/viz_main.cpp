@@ -10,12 +10,22 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+// windows.h defines min/max as macros, which breaks every std::max in this
+// file; NOMINMAX suppresses them.
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #include <SDL3/SDL.h>
 
 #include "core/Connectome.h"
+#include "core/DataPath.h"
 #include "core/LIFNetwork.h"
 #include "core/NeuronNames.h"
 #include "viz/Camera.h"
@@ -158,7 +168,7 @@ void printHelp() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     std::string dataDir = "data/bin";
     std::int64_t stimBody = 10001;
     std::string stimType;
@@ -192,6 +202,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    dataDir = findDataDir(dataDir, argv[0]);
     Connectome conn = Connectome::load(dataDir + "/cns.bin");
     std::printf("loaded %u neurons, %llu edges\n", conn.neuronCount(),
                 static_cast<unsigned long long>(conn.edgeCount()));
@@ -472,4 +483,39 @@ int main(int argc, char** argv) {
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
+}
+
+namespace {
+
+// True when this process created its own console -- which is what happens when
+// a console application is double-clicked, and means the window will vanish
+// with the process before anything printed to it can be read. Launched from an
+// existing shell the console belongs to that shell, and the text stays put.
+bool ownsItsConsole() {
+#ifdef _WIN32
+    HWND console = GetConsoleWindow();
+    if (!console) return false;
+    DWORD consolePid = 0;
+    GetWindowThreadProcessId(console, &consolePid);
+    return consolePid == GetCurrentProcessId();
+#else
+    return false;
+#endif
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        // Only pop a dialog when the message would otherwise be lost, so
+        // terminal and scripted runs are not left waiting on a click.
+        if (ownsItsConsole()) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FlyBrain",
+                                     e.what(), nullptr);
+        }
+        return 1;
+    }
 }
