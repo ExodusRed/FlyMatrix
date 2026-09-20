@@ -11,11 +11,16 @@ lights them as they fire.
 ## Layout
 
 ```
-tools/       Python, run once: pull the connectome and pack it to binary
-src/core/    C++ simulation engine (no dependencies)
-src/viz/     C++ 3D renderer (SDL3 + OpenGL 3.3)
+tools/       Python, run once: pull the connectome, pack it, derive the motor map
+src/core/    simulation engine (no dependencies)
+src/engine/  maths and mesh generation
+src/body/    fly skeleton and the motor-neuron-to-muscle bridge
+src/viz/     3D renderer (SDL3 + OpenGL 3.3)
 data/        downloaded + packed data (gitignored)
 ```
+
+Three programs: `flysim` runs the model headless, `flyviz` draws the nervous
+system, and `flybody` drives a fly's legs from its own motor neurons.
 
 ## Getting the data
 
@@ -253,6 +258,88 @@ connectome.
 
 See `LifParams` in [LIFNetwork.h](src/core/LIFNetwork.h) for the full parameter
 set.
+
+
+## The body
+
+```sh
+python tools/motor_map.py                       # once, after pack_cns.py
+./build/Release/flybody                         # drives the knee flexors
+./build/Release/flybody --stim-type "Tr extensor MN"
+./build/Release/flybody --dump-pose             # check the skeleton, no window
+```
+
+The connectome names every motor neuron after the muscle it drives, and
+`somaNeuromere` plus `somaSide` say which of the six legs it belongs to:
+
+```
+Ti flexor MN_R    neuromere=T1  side=R    right front leg, knee flexor
+Ti flexor MN_L    neuromere=T3  side=L    left hind leg, knee flexor
+```
+
+`tools/motor_map.py` turns that into a wiring table: 334 of the 708 VNC motor
+neurons, across all six legs and all five leg joints. The rest are wing
+steering muscles, flight power muscles, halteres and abdominal muscles, which
+sit in leg neuromeres because those structures attach to the thorax but do not
+move a leg. A further group, the `MNhl*`/`MNml*` neurons, *are* leg motor
+neurons but are numbered rather than named after a muscle, so there is nothing
+to map them by.
+
+Each joint gets two antagonist pools. Spikes are low-pass filtered into a
+muscle activation with a 30 ms time constant, and the difference between the
+antagonists sets the joint angle. The filter is not smoothing for its own sake:
+muscle force develops over tens of milliseconds, so firing *rate* is what a
+muscle responds to, and it also bridges the gap between a 0.1 ms neural step
+and a display frame.
+
+Driving one named pool moves one joint:
+
+```
+$ flybody --stim-type "Ti flexor MN" --frames 60
+leg        joint      flex   extend angle-rest
+front_L    FTi       0.392    0.000     -0.275
+middle_L   FTi       0.392    0.000     -0.236
+hind_L     FTi       0.392    0.000     -0.275
+...
+```
+
+Only FTi, the knee, on every leg that has those neurons, in the flexor
+direction. `Tr extensor MN` moves CTr the other way instead.
+
+### The skeleton
+
+Six legs of five joints each, at *Drosophila* proportions, in millimetres. The
+rest pose is not hand-tuned: `tools/solve_rest_pose.py` mirrors the forward
+kinematics and runs damped least squares on the five angles of each leg until
+the foot reaches the ground. Five coupled angles per leg, to a common ground
+height, is not something to fit by eye.
+
+`--dump-pose` checks the result without opening a window, including that left
+and right are exact mirrors. That check earns its place: an earlier version had
+the mirroring rule backwards and every foot still passed a "below the body and
+out to the side" test while the two sides sat in visibly different poses.
+
+Two things the solver taught us about fly legs. The hind knee has to bend the
+*opposite way* to the others -- forcing all six to fold alike leaves the hind
+leg unable to reach behind the body at all. And thorax-coxa has to be kept
+short of horizontal, because given free rein the solver reaches the target by
+routing the femur up over the thorax: a valid solution to the equations and a
+nonsense one for a fly.
+
+### What this is not
+
+There is no physics yet. Joint angles are set directly, the body floats at a
+fixed height, and nothing collides with anything. Ground contact and rigid-body
+dynamics are the next stage.
+
+It will also not walk. Coordinated locomotion depends on central pattern
+generators whose dynamics live in neuromodulation and intrinsic membrane
+properties that a LIF model does not have -- this model sets modulatory
+transmitters to zero gain outright. Connectome-driven walking is an open
+research problem; NeuroMechFly, the state of the art for a neuromechanical fly,
+gets its gaits from optimised CPGs and motion capture rather than from
+simulating the connectome. Reflexes and single muscle actions are in reach.
+Gait is not.
 
 ## Caveats
 

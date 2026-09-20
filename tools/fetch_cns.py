@@ -71,7 +71,7 @@ def fetch_neurons() -> None:
             f"""MATCH (n:Neuron)
                 RETURN n.bodyId, n.somaLocation.x, n.somaLocation.y, n.somaLocation.z,
                        n.consensusNt, n.predictedNt, n.type, n.class, n.superclass,
-                       n.somaSide, n.pre, n.post, n.size
+                       n.somaSide, n.pre, n.post, n.size, n.somaNeuromere, n.subclass
                 ORDER BY n.bodyId SKIP {skip} LIMIT {NEURON_CHUNK}"""
         )
         rows.extend(batch)
@@ -90,6 +90,10 @@ def fetch_neurons() -> None:
     classes: list[str] = []
     superclasses: list[str] = []
     soma_side: list[str] = []
+    # Which body segment the soma sits in: T1/T2/T3 are the three leg
+    # pairs, A1-A5 abdominal. With somaSide this identifies the leg.
+    neuromere: list[str] = []
+    subclass: list[str] = []
 
     for i, r in enumerate(rows):
         body_id[i] = r[0]
@@ -107,6 +111,8 @@ def fetch_neurons() -> None:
         pre[i] = r[10] or 0
         post[i] = r[11] or 0
         size[i] = r[12] or 0
+        neuromere.append(r[13] or '')
+        subclass.append(r[14] or '')
 
     RAW.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -115,6 +121,7 @@ def fetch_neurons() -> None:
         size=size,
         type=np.array(types), cls=np.array(classes),
         superclass=np.array(superclasses), soma_side=np.array(soma_side),
+        neuromere=np.array(neuromere), subclass=np.array(subclass),
     )
     have_soma = int(np.isfinite(pos[:, 0]).sum())
     log(f"wrote {out.name}: {n:,} neurons, {have_soma:,} with soma "

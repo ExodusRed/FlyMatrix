@@ -24,6 +24,8 @@ add_library(flycore STATIC
   src/core/LIFNetwork.cpp
   src/core/DataPath.cpp
   src/core/NeuronNames.cpp
+  src/body/FlyBody.cpp
+  src/body/MotorPools.cpp
 )
 target_include_directories(flycore PUBLIC src)
 
@@ -74,6 +76,15 @@ if(FLYBRAIN_VIZ)
   )
   target_link_libraries(flyviz PRIVATE flycore SDL3::SDL3 OpenGL::GL)
   set_target_properties(flyviz PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+  add_executable(flybody
+    src/body_main.cpp
+    src/engine/Mesh.cpp
+    src/viz/GL.cpp
+  )
+  target_link_libraries(flybody PRIVATE flycore SDL3::SDL3 OpenGL::GL)
+  set_target_properties(flybody PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
   # SDL3 is built as a DLL, so it has to sit beside the executable to run.
