@@ -1,0 +1,9 @@
+# Connectome data is large and reproducible from tools/fetch_cns.py.
+data/raw/
+data/bin/
+
+build/
+out/
+*.user
+__pycache__/
+*.pyc
