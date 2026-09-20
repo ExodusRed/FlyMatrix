@@ -4,15 +4,16 @@ A leaky integrate-and-fire simulation of the adult *Drosophila* central nervous
 system, built on the Janelia **male-cns:v1.0** connectome — 176,422 neurons and
 ~25.9M synaptic connections spanning brain and ventral nerve cord.
 
-The end goal is an interactive 3D sandbox in C++. The data pipeline and
-simulation engine work; the renderer is not built yet.
+Two programs: `flysim` runs the model headless and reports who fired, and
+`flyviz` draws all 176,422 neurons in their real anatomical positions and
+lights them as they fire.
 
 ## Layout
 
 ```
 tools/       Python, run once: pull the connectome and pack it to binary
 src/core/    C++ simulation engine (no dependencies)
-src/viz/     C++ 3D renderer (SDL3 + OpenGL) -- stage 3, not yet built
+src/viz/     C++ 3D renderer (SDL3 + OpenGL 3.3)
 data/        downloaded + packed data (gitignored)
 ```
 
@@ -52,6 +53,70 @@ Drive a cell type and see what lights up downstream:
 `DNp01` is the giant fibre descending neuron that triggers the escape reflex —
 a good first target, because its downstream path into the leg motor neurons is
 well described in the literature and you can check the simulation against it.
+
+
+## The 3D view
+
+```sh
+./build/Release/flyviz                       # giant fibre, the default
+./build/Release/flyviz --stim-type L2        # drive the lamina instead
+```
+
+| | |
+|---|---|
+| left drag | orbit |
+| right drag | pan |
+| scroll | zoom |
+| space | fire the stimulus again |
+| `[` `]` | fewer / more simulation steps per frame |
+| `r` | reset |
+| `s` | hide resting neurons, show only active ones |
+| `esc` | quit |
+
+What you see is slow motion by default -- eight simulation steps per frame, so
+about 0.8 ms of fly time per frame. That is deliberate. At true speed the
+synaptic delay is 1.8 ms and the whole escape response would be over in three
+frames.
+
+Neurons are drawn as point sprites with additive blending and no depth test, so
+the cloud reads as a volume and density becomes brightness rather than the
+nearest point hiding everything behind it. Resting neurons sit at a low alpha;
+firing ones get both brighter and larger, because a response involving a few
+hundred neurons has to be visible against 176,000 resting ones. Graded neurons
+never spike, so they are drawn from their continuous output instead.
+
+### Checking that it draws what the model does
+
+`--frames N --screenshot FILE` renders N frames and saves the last one, which
+makes the renderer testable without a human watching the window. Diffing those
+frames against an unstimulated baseline tracks where activity actually is:
+
+| sim time | activity centroid | region |
+|---------:|------------------:|--------|
+| 1.2 ms   | (nothing yet)     | -- |
+| 2.4 ms   | x = 560           | brain |
+| 9.6 ms   | x = 894           | nerve cord |
+
+Nothing happens before 1.8 ms because that is the synaptic delay; activity then
+appears in the brain and reaches the ventral nerve cord about 7 ms later, which
+is roughly four synaptic hops. The descending wave is real, not a lighting
+effect.
+
+Measuring this needs the baseline subtraction. A naive "count bright pixels"
+threshold returns exactly the same number every frame, because the densest
+regions of the optic lobe accumulate past any fixed threshold while at rest.
+
+### Dependencies
+
+SDL3 and OpenGL 3.3. CMake looks for an SDL3 checkout at `../Library/SDL` by
+default and builds it into this project's own build tree; point it elsewhere
+with `-DFLYBRAIN_SDL_DIR=<path>`, or install SDL3 and it will be found. Build
+with `-DFLYBRAIN_VIZ=OFF` to skip the renderer entirely.
+
+The ~27 OpenGL entry points beyond 1.1 are resolved through
+`SDL_GL_GetProcAddress` in [src/viz/GL.h](src/viz/GL.h) rather than pulling in
+GLAD or GLEW, and the matrix maths is a few dozen lines in
+[src/viz/Camera.h](src/viz/Camera.h) rather than GLM. Nothing else is needed.
 
 ## Model
 

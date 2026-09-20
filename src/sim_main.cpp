@@ -17,51 +17,9 @@
 
 #include "core/Connectome.h"
 #include "core/LIFNetwork.h"
+#include "core/NeuronNames.h"
 
 namespace {
-
-struct Names {
-    std::vector<std::string> type;
-    std::vector<std::string> superclass;
-    std::unordered_map<std::string, std::vector<std::uint32_t>> byType;
-
-    static Names load(const std::string& path, std::uint32_t n) {
-        Names nm;
-        nm.type.resize(n);
-        nm.superclass.resize(n);
-        std::ifstream f(path);
-        if (!f) {
-            std::cerr << "warning: " << path
-                      << " not found, neurons will be unlabelled\n";
-            return nm;
-        }
-        std::string line;
-        std::getline(f, line);  // header
-        while (std::getline(f, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            // index, body_id, type, superclass
-            const std::size_t a = line.find('\t');
-            if (a == std::string::npos) continue;
-            const std::size_t b = line.find('\t', a + 1);
-            if (b == std::string::npos) continue;
-            const std::size_t c = line.find('\t', b + 1);
-            if (c == std::string::npos) continue;
-
-            std::uint32_t idx = 0;
-            std::from_chars(line.data(), line.data() + a, idx);
-            if (idx >= n) continue;
-            nm.type[idx] = line.substr(b + 1, c - b - 1);
-            nm.superclass[idx] = line.substr(c + 1);
-            if (!nm.type[idx].empty()) nm.byType[nm.type[idx]].push_back(idx);
-        }
-        return nm;
-    }
-
-    std::string label(std::uint32_t i) const {
-        if (i < type.size() && !type[i].empty()) return type[i];
-        return "(untyped)";
-    }
-};
 
 [[noreturn]] void usage() {
     std::cout <<
@@ -138,11 +96,17 @@ int main(int argc, char** argv) {
 
     try {
         const auto conn = fly::Connectome::load(dataDir + "/cns.bin");
-        const auto names = Names::load(dataDir + "/cns_names.tsv", conn.neuronCount());
+        bool haveNames = false;
+        const auto names = fly::NeuronNames::load(dataDir + "/cns_names.tsv",
+                                             conn.neuronCount(), &haveNames);
+        if (!haveNames) {
+            std::cerr << "warning: cns_names.tsv not found, neurons unlabelled"
+                      << "\n";
+        }
 
         if (!listTypes.empty()) {
             std::vector<std::string> hits;
-            for (const auto& entry : names.byType) {
+            for (const auto& entry : names.byType()) {
                 if (entry.first.find(listTypes) != std::string::npos) {
                     hits.push_back(entry.first + "  (" +
                                    std::to_string(entry.second.size()) + " neurons)");
@@ -171,13 +135,13 @@ int main(int argc, char** argv) {
 
         std::vector<std::uint32_t> driven;
         for (const auto& t : stimTypes) {
-            const auto it = names.byType.find(t);
-            if (it == names.byType.end()) {
+            const auto of = names.ofType(t);
+            if (of.empty()) {
                 std::cerr << "no cell type named " << t
                           << " -- try --list-types " << t << "\n";
                 return 1;
             }
-            driven.insert(driven.end(), it->second.begin(), it->second.end());
+            driven.insert(driven.end(), of.begin(), of.end());
         }
         for (const auto id : stimBodies) {
             const auto idx = conn.indexOf(id);
@@ -247,7 +211,7 @@ int main(int argc, char** argv) {
             std::printf("%-5zu %-12lld %-24s %-20s %8u %9.1f\n",
                         r + 1, static_cast<long long>(conn.bodyIds()[i]),
                         names.label(i).c_str(),
-                        (i < names.superclass.size() ? names.superclass[i].c_str() : ""),
+                        names.superclass(i).c_str(),
                         totals[i], totals[i] / (durationMs / 1000.0));
         }
 
@@ -275,7 +239,7 @@ int main(int argc, char** argv) {
                 std::printf("%-5zu %-12lld %-24s %-20s %7u %8u\n",
                             r + 1, static_cast<long long>(conn.bodyIds()[i]),
                             names.label(i).c_str(),
-                            (i < names.superclass.size() ? names.superclass[i].c_str() : ""),
+                            names.superclass(i).c_str(),
                             ts[r].w, totals[i]);
             }
         }
