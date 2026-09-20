@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -23,6 +24,7 @@
 #include <SDL3/SDL.h>
 
 #include "body/FlyBody.h"
+#include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
 #include "core/Connectome.h"
 #include "core/DataPath.h"
@@ -132,14 +134,18 @@ void printHelp() {
     std::printf(
         "flybody -- the fly's legs driven by its own motor neurons\n\n"
         "  --data DIR         directory holding cns.bin (default: data/bin)\n"
-        "  --stim-type NAME   cell type to drive (default: Ti flexor MN)\n"
-        "  --stim-body ID     drive one neuron by bodyId instead\n"
+        "  --stim-type NAME   cell type to drive instead of a single neuron\n"
+        "  --stim-body ID     neuron to drive (default: 10001, the giant fibre)\n"
         "  --epsp MV          depolarisation per synapse (default: 0.085)\n"
         "  --steps N          simulation steps per frame (default: 8)\n"
         "  --pulse MS         stimulus pulse length, 0 for continuous (default: 0)\n"
         "  --frames N         render N frames then exit (for testing)\n"
         "  --screenshot FILE  save a BMP of the last frame\n"
-        "  --dump-pose        print the rest pose and exit\n\n"
+        "  --dump-pose        print the rest pose and exit\n"
+        "  --no-physics       set joint angles directly instead of simulating\n"
+        "  --drop MS          run physics headlessly for MS and report\n"
+        "  --jump-scale X     jump muscle strength multiplier (default: 8)\n"
+        "  --muscle-torque X  peak torque per muscle pool\n\n"
         "controls\n"
         "  left drag   orbit          scroll  zoom         right drag  pan\n"
         "  space       fire stimulus  r       reset        esc         quit\n");
@@ -176,14 +182,18 @@ bool saveScreenshot(const std::string& path, int w, int h) {
 
 int run(int argc, char** argv) {
     std::string dataDir = "data/bin";
-    std::string stimType = "Ti flexor MN";
-    std::int64_t stimBody = -1;
+    std::string stimType;
+    std::int64_t stimBody = 10001;  // DNp01, the giant fibre
     LifParams params;
     int stepsPerFrame = 8;
-    float pulseMs = 0.0f;
+    float pulseMs = 20.0f;
     long frameLimit = 0;
     std::string shotPath;
     bool dumpPose = false;
+    bool usePhysics = true;
+    float dropMs = 0.0f;
+    float jumpScale = -1.0f;
+    float muscleTorque = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -201,6 +211,10 @@ int run(int argc, char** argv) {
         else if (a == "--frames") frameLimit = std::atol(next("--frames").c_str());
         else if (a == "--screenshot") shotPath = next("--screenshot");
         else if (a == "--dump-pose") dumpPose = true;
+        else if (a == "--no-physics") usePhysics = false;
+        else if (a == "--drop") dropMs = std::stof(next("--drop"));
+        else if (a == "--jump-scale") jumpScale = std::stof(next("--jump-scale"));
+        else if (a == "--muscle-torque") muscleTorque = std::stof(next("--muscle-torque"));
         else throw std::runtime_error("unknown option: " + a);
     }
 
@@ -229,29 +243,57 @@ int run(int argc, char** argv) {
 
     LIFNetwork net(conn, params);
     FlyBody body;
+    FlyPhysics phys;
+    if (jumpScale > 0.0f) phys.params.jumpTorqueScale = jumpScale;
+    if (muscleTorque > 0.0f) phys.params.maxMuscleTorque = muscleTorque;
+    if (usePhysics) phys.build(body);
 
-    if (dumpPose) {
-        // A leg is only plausible if its foot ends up below the body and out
-        // to its own side. Checking that numerically beats squinting at a
-        // render and guessing which joint is wrong.
-        std::printf("body at z = %.3f mm\n\n", body.root.position.z);
-        std::printf("%-10s %8s %8s %8s   %s\n",
-                    "leg", "foot x", "foot y", "foot z", "check");
-        bool allOk = true;
-        for (int l = 0; l < kLegCount; ++l) {
-            const auto id = static_cast<LegId>(l);
-            const V3 f = body.footPosition(id);
-            const float side = (l % 2 == 0) ? 1.0f : -1.0f;  // even index = left
-            const bool below = f.z < body.root.position.z - 0.15f;
-            const bool outward = f.y * side > 0.02f;
-            allOk = allOk && below && outward;
-            std::printf("%-10s %8.3f %8.3f %8.3f   %s%s\n", legName(id),
-                        f.x, f.y, f.z,
-                        below ? "" : "ABOVE BODY ",
-                        outward ? (below ? "ok" : "") : "CROSSES MIDLINE");
+    if (dropMs > 0.0f) {
+        // Headless end-to-end run: nervous system, muscles and body together.
+        // The neural model steps at 0.1 ms and the solver at 1 ms, so ten
+        // neural steps feed each physics step.
+        const float physDt = 0.001f;            // seconds
+        const int neuralPerPhys = static_cast<int>(1.0f / params.dtMs);
+        const int n = static_cast<int>(dropMs / 1000.0f / physDt);
+        float stimLeft = (pulseMs > 0.0f) ? pulseMs : dropMs;
+        for (const auto i : driven) net.setStimulus(i, 200.0f);
+
+        std::printf("running %.0f ms: %zu driven neuron(s), physics at %.0f Hz\n",
+                    dropMs, driven.size(), 1.0f / physDt);
+        std::printf("%8s %10s %10s %9s %9s\n",
+                    "t (ms)", "height", "peak", "contacts", "CTr act");
+        for (int i = 0; i < n; ++i) {
+            for (int k = 0; k < neuralPerPhys; ++k) {
+                net.step();
+                pools.accumulate(net);
+                if (stimLeft > 0.0f) {
+                    stimLeft -= params.dtMs;
+                    if (stimLeft <= 0.0f) net.clearStimulus();
+                }
+            }
+            pools.apply(1.0f, body);
+            phys.step(physDt, pools);
+
+            if (i % std::max(1, n / 12) == 0 || i == n - 1) {
+                // Coxa-trochanter is where the jump muscle pulls.
+                float ctr = 0.0f;
+                for (int l = 0; l < kLegCount; ++l) {
+                    ctr = std::max(ctr,
+                        pools.pools()[l][static_cast<int>(Joint::CTr)][1].activation);
+                }
+                std::printf("%8.0f %10.4f %10.4f %9zu %9.3f\n",
+                            i * physDt * 1000.0f, phys.bodyHeight(),
+                            phys.peakHeight(), phys.world.contacts.size(), ctr);
+            }
+            if (!std::isfinite(phys.bodyHeight()) ||
+                std::fabs(phys.bodyHeight()) > 1e4f) {
+                std::printf("\nSOLVER DIVERGED at %.0f ms\n", i * physDt * 1000.0f);
+                return 2;
+            }
         }
-        std::printf("\nrest pose %s\n", allOk ? "OK" : "FAILED");
-        return allOk ? 0 : 2;
+        std::printf("\nfinal %.4f mm, peak %.4f mm\n",
+                    phys.bodyHeight(), phys.peakHeight());
+        return 0;
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) throw std::runtime_error(SDL_GetError());
@@ -352,8 +394,14 @@ int run(int argc, char** argv) {
                 if (stimRemaining <= 0.0f) { net.clearStimulus(); stimulating = false; }
             }
         }
-        pools.apply(static_cast<float>(stepsPerFrame) * params.dtMs, body);
-        body.worldPose(segments);
+        const float frameMs = static_cast<float>(stepsPerFrame) * params.dtMs;
+        pools.apply(frameMs, body);
+        if (usePhysics) {
+            phys.step(frameMs / 1000.0f, pools);
+            phys.readPose(segments);
+        } else {
+            body.worldPose(segments);
+        }
 
         int w = 0, h = 0;
         SDL_GetWindowSizeInPixels(window, &w, &h);

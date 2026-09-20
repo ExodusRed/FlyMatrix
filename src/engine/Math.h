@@ -82,6 +82,103 @@ struct Transform {
     }
 };
 
+// 3x3 matrix, row-major. Used for inertia tensors and the effective-mass
+// matrices the constraint solver inverts.
+struct M3 {
+    // m[row][col]
+    float m[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+
+    static M3 zero() {
+        M3 r;
+        for (auto& row : r.m) for (float& v : row) v = 0.0f;
+        return r;
+    }
+
+    static M3 diagonal(float a, float b, float c) {
+        M3 r = zero();
+        r.m[0][0] = a; r.m[1][1] = b; r.m[2][2] = c;
+        return r;
+    }
+
+    // The matrix that turns a cross product into a multiplication:
+    // skew(a) * b == cross(a, b). The constraint solver is written in terms of
+    // this because it lets an angular term be folded into a matrix.
+    static M3 skew(const V3& a) {
+        M3 r = zero();
+        r.m[0][1] = -a.z; r.m[0][2] =  a.y;
+        r.m[1][0] =  a.z; r.m[1][2] = -a.x;
+        r.m[2][0] = -a.y; r.m[2][1] =  a.x;
+        return r;
+    }
+
+    static M3 fromQuat(const Quat& q) {
+        const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+        const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+        const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+        M3 r;
+        r.m[0][0] = 1 - 2 * (yy + zz); r.m[0][1] = 2 * (xy - wz);     r.m[0][2] = 2 * (xz + wy);
+        r.m[1][0] = 2 * (xy + wz);     r.m[1][1] = 1 - 2 * (xx + zz); r.m[1][2] = 2 * (yz - wx);
+        r.m[2][0] = 2 * (xz - wy);     r.m[2][1] = 2 * (yz + wx);     r.m[2][2] = 1 - 2 * (xx + yy);
+        return r;
+    }
+
+    V3 operator*(const V3& v) const {
+        return {m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+                m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+                m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z};
+    }
+
+    M3 operator*(const M3& o) const {
+        M3 r = zero();
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k) r.m[i][j] += m[i][k] * o.m[k][j];
+        return r;
+    }
+
+    M3 operator+(const M3& o) const {
+        M3 r;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) r.m[i][j] = m[i][j] + o.m[i][j];
+        return r;
+    }
+
+    M3 operator-() const {
+        M3 r;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) r.m[i][j] = -m[i][j];
+        return r;
+    }
+
+    M3 transposed() const {
+        M3 r;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) r.m[i][j] = m[j][i];
+        return r;
+    }
+
+    // Returns false for a singular matrix rather than producing infinities,
+    // which in a constraint solver show up as the whole scene exploding.
+    bool invert(M3& out) const {
+        const float c00 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
+        const float c01 = m[1][2] * m[2][0] - m[1][0] * m[2][2];
+        const float c02 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
+        const float det = m[0][0] * c00 + m[0][1] * c01 + m[0][2] * c02;
+        if (std::fabs(det) < 1e-20f) return false;
+        const float inv = 1.0f / det;
+        out.m[0][0] = c00 * inv;
+        out.m[1][0] = c01 * inv;
+        out.m[2][0] = c02 * inv;
+        out.m[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv;
+        out.m[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv;
+        out.m[2][1] = (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv;
+        out.m[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv;
+        out.m[1][2] = (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv;
+        out.m[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv;
+        return true;
+    }
+};
+
 struct M4 {
     float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 

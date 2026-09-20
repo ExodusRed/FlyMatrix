@@ -1,0 +1,187 @@
+#include "FlyPhysics.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace fly {
+namespace {
+
+// Rotation taking local -Z onto `dir`, matching how a segment is drawn.
+Quat aimDownZ(const V3& dir) {
+    const V3 d = normalise(dir);
+    const V3 from{0, 0, -1};
+    const float c = dot(from, d);
+    if (c > 0.99999f) return {};
+    if (c < -0.99999f) return Quat::axisAngle({1, 0, 0}, 3.14159265f);
+    return Quat::axisAngle(cross(from, d), std::acos(std::clamp(c, -1.0f, 1.0f)));
+}
+
+}  // namespace
+
+void FlyPhysics::build(const FlyBody& skeleton) {
+    world = PhysicsWorld{};
+    segments_.clear();
+
+    // --- trunk ---
+    RigidBody thorax;
+    thorax.position = skeleton.root.position;
+    thorax.orientation = skeleton.root.rotation;
+    thorax.setBoxInertia(params.thoraxMass, {0.46f, 0.30f, 0.30f});
+    thorax_ = world.addBody(thorax);
+
+    RigidBody abdomen;
+    abdomen.position = skeleton.root.apply({-0.78f, 0, -0.04f});
+    abdomen.orientation = skeleton.root.rotation;
+    abdomen.setBoxInertia(params.abdomenMass, {0.52f, 0.26f, 0.26f});
+    abdomen_ = world.addBody(abdomen);
+
+    RigidBody head;
+    head.position = skeleton.root.apply({0.52f, 0, 0.05f});
+    head.orientation = skeleton.root.rotation;
+    head.setBoxInertia(params.headMass, {0.22f, 0.21f, 0.21f});
+    head_ = world.addBody(head);
+
+    // Abdomen and head are welded on: two hinges with opposing axes at the
+    // same anchor come close enough to rigid for this purpose, and it avoids a
+    // separate fixed-constraint type.
+    for (int k = 0; k < 2; ++k) {
+        HingeJoint j;
+        j.a = thorax_;
+        j.b = abdomen_;
+        j.anchorA = {-0.40f, 0, -0.02f};
+        j.anchorB = {0.38f, 0, 0.02f};
+        j.axisA = j.axisB = (k == 0) ? V3{0, 1, 0} : V3{0, 0, 1};
+        j.stiffness = params.jointStiffness * 3.0f;
+        j.damping = params.jointDamping * 3.0f;
+        world.joints.push_back(j);
+
+        HingeJoint h;
+        h.a = thorax_;
+        h.b = head_;
+        h.anchorA = {0.42f, 0, 0.04f};
+        h.anchorB = {-0.10f, 0, -0.01f};
+        h.axisA = h.axisB = (k == 0) ? V3{0, 1, 0} : V3{0, 0, 1};
+        h.stiffness = params.jointStiffness * 3.0f;
+        h.damping = params.jointDamping * 3.0f;
+        world.joints.push_back(h);
+    }
+
+    // --- legs ---
+    std::vector<FlyBody::SegmentPose> pose;
+    skeleton.worldPose(pose);
+
+    for (int l = 0; l < kLegCount; ++l) {
+        const Leg& leg = skeleton.legs()[l];
+        std::uint32_t parent = thorax_;
+        V3 parentAnchorLocal = leg.attach;
+
+        for (int j = 0; j < kJointCount; ++j) {
+            const FlyBody::SegmentPose& sp = pose[static_cast<std::size_t>(l) * kJointCount + j];
+            const V3 delta = sp.b - sp.a;
+            const float len = length(delta);
+            const Quat rot = aimDownZ(delta);
+
+            RigidBody seg;
+            // The body's origin sits at its proximal end, so the anchor to the
+            // parent is simply the origin and the distal anchor is -Z * length.
+            seg.position = sp.a;
+            seg.orientation = rot;
+            const float mass = std::max(params.minSegmentMass,
+                                        len * 40.0f * params.segmentMassScale);
+            seg.setCapsuleInertia(mass, std::max(sp.radius, 0.02f), len);
+            const std::uint32_t id = world.addBody(seg);
+
+            HingeJoint hj;
+            hj.a = parent;
+            hj.b = id;
+            hj.anchorA = parentAnchorLocal;
+            hj.anchorB = {0, 0, 0};
+            // The hinge axis is the skeleton's joint axis, expressed in each
+            // body's own frame.
+            const V3 worldAxis = (j == 0)
+                ? skeleton.root.rotation.rotate(leg.joints[j].axis)
+                : rot.rotate(leg.joints[j].axis);
+            const M3 ra = M3::fromQuat(world.bodies[parent].orientation);
+            const M3 rb = M3::fromQuat(rot);
+            hj.axisA = ra.transposed() * worldAxis;
+            hj.axisB = rb.transposed() * worldAxis;
+            hj.stiffness = params.jointStiffness;
+            hj.damping = params.jointDamping;
+            hj.minAngle = leg.joints[j].minAngle - leg.angle[j];
+            hj.maxAngle = leg.joints[j].maxAngle - leg.angle[j];
+
+            jointIndex_[l][j] = static_cast<std::uint32_t>(world.joints.size());
+            restAngle_[l][j] = 0.0f;  // measured from the built pose
+            world.joints.push_back(hj);
+
+            segments_.push_back({id, len, sp.radius, sp.leg, sp.joint});
+
+            parent = id;
+            parentAnchorLocal = {0, 0, -len};
+        }
+
+        // The foot: a contact probe at the far tip of the tarsus.
+        const std::uint32_t tarsus = segments_.back().body;
+        world.probes.push_back({tarsus, {0, 0, -segments_.back().length},
+                                segments_.back().radius});
+    }
+
+    // The trunk needs contacts too, or a collapse takes the body straight
+    // through the floor instead of resting on it.
+    world.probes.push_back({thorax_, {0.0f, 0, -0.28f}, 0.05f});
+    world.probes.push_back({abdomen_, {-0.2f, 0, -0.24f}, 0.05f});
+    world.probes.push_back({head_, {0.0f, 0, -0.19f}, 0.05f});
+
+    world.prepare();
+    restHeight_ = world.bodies[thorax_].position.z;
+    peakHeight_ = restHeight_;
+    airborne_ = false;
+}
+
+void FlyPhysics::reset(const FlyBody& skeleton) {
+    build(skeleton);
+}
+
+void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
+    if (dtSeconds <= 0.0f) return;
+
+    // Drive every joint from its two antagonist pools. Extensor minus flexor,
+    // scaled to a torque -- the same difference that used to set an angle
+    // directly now sets a force, and the body decides what happens.
+    for (int l = 0; l < kLegCount; ++l) {
+        for (int j = 0; j < kJointCount; ++j) {
+            const auto& pool = pools.pools()[l][j];
+            const float drive = pool[1].activation - pool[0].activation;
+            float scale = params.maxMuscleTorque;
+            // The tergotrochanteral jump muscle acts on the coxa-trochanter
+            // joint and is far stronger than a postural muscle.
+            if (static_cast<Joint>(j) == Joint::CTr) scale *= params.jumpTorqueScale;
+            HingeJoint& hj = world.joints[jointIndex_[l][j]];
+            hj.motorTorque = drive * scale;
+            hj.restAngle = restAngle_[l][j];
+        }
+    }
+
+    const float h = 1.0f / params.substepHz;
+    int steps = static_cast<int>(std::ceil(dtSeconds / h));
+    steps = std::clamp(steps, 1, 256);
+    const float sub = dtSeconds / static_cast<float>(steps);
+    for (int i = 0; i < steps; ++i) world.step(sub);
+
+    const float z = world.bodies[thorax_].position.z;
+    peakHeight_ = std::max(peakHeight_, z);
+    airborne_ = world.contacts.empty();
+}
+
+void FlyPhysics::readPose(std::vector<FlyBody::SegmentPose>& out) const {
+    out.clear();
+    out.reserve(segments_.size());
+    for (const auto& s : segments_) {
+        const RigidBody& b = world.bodies[s.body];
+        const V3 a = b.position;
+        const V3 tip = b.position + b.orientation.rotate({0, 0, -s.length});
+        out.push_back({a, tip, s.radius, s.leg, s.joint});
+    }
+}
+
+}  // namespace fly

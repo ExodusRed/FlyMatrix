@@ -328,10 +328,6 @@ nonsense one for a fly.
 
 ### What this is not
 
-There is no physics yet. Joint angles are set directly, the body floats at a
-fixed height, and nothing collides with anything. Ground contact and rigid-body
-dynamics are the next stage.
-
 It will also not walk. Coordinated locomotion depends on central pattern
 generators whose dynamics live in neuromodulation and intrinsic membrane
 properties that a LIF model does not have -- this model sets modulatory
@@ -340,6 +336,70 @@ research problem; NeuroMechFly, the state of the art for a neuromechanical fly,
 gets its gaits from optimised CPGs and motion capture rather than from
 simulating the connectome. Reflexes and single muscle actions are in reach.
 Gait is not.
+
+
+## Physics, and the escape jump
+
+```sh
+./build/Release/flybody                  # fires the giant fibre
+./build/Release/flybody --drop 250       # same, headless, prints the trace
+./build/Release/flybody --no-physics     # set joint angles directly instead
+```
+
+The body is now 33 rigid bodies held together by 34 hinge constraints, solved
+in maximal coordinates with sequential impulses, standing on a ground plane
+with friction. Muscle activation becomes joint torque rather than a joint
+angle, so the body decides what happens.
+
+Firing the giant fibre makes the fly jump, and the controls are clean:
+
+| stimulus | peak height | leaves the ground |
+|----------|------------:|-------------------|
+| none | 0.62 mm | no |
+| optic lobe (L2) | 0.62 mm | no |
+| knee flexor | 0.62 mm | no |
+| **giant fibre (DNp01)** | **0.94 mm** | **yes** |
+
+Every link in that is real except the physics: DNp01 fires TTMn, TTMn is in the
+coxa-trochanter extensor pool because the connectome names it that way, and
+that pool's torque pushes the leg against the ground.
+
+Worth noting that L2 reached a *higher* coxa-trochanter activation than the
+giant fibre did and still did not jump. It is not raw activation that launches
+the fly, it is which muscles fire together.
+
+### What is honest about this and what is not
+
+- **The jump strength is tuned, not derived.** Below about 20x the fly never
+  leaves the ground. Some of that is fair -- the tergotrochanteral muscle
+  really is exceptional -- but part is an artefact: TTMn is 2 neurons inside a
+  pool of ~18, and averaging the pool dilutes the one muscle that matters.
+- **The timing is wrong.** A real escape takeoff is over in about 5 ms. Here
+  the fly sinks for 160 ms and then launches, because muscle activation has a
+  30 ms time constant and nothing models a fast-twitch muscle.
+- **It tumbles afterwards.** There is no righting reflex, no wings, and no air.
+
+### What the solver needed
+
+Maximal coordinates on a 30-link chain behaves exactly as advertised, and two
+mitigations were not optional:
+
+- **Inertia aspect ratio is clamped to 4:1.** A thin segment's inertia about
+  its own long axis is a hundredth of its inertia across it, and explicit
+  damping is stable only for `dt < 2I/c`, so that one tiny principal moment set
+  the timestep for the entire simulation -- and the trochanter-femur joint
+  twists about exactly that axis.
+- **Velocities are clamped.** A large muscle torque on a light distal segment
+  produced 4,500 rad/s in a single substep, which no number of solver
+  iterations can reconcile; the scene reached 1e20 mm and stayed finite, so it
+  slipped past a NaN check. Clamping silently discards momentum. It is a crude
+  fix and the honest description of it is that it bounds the damage.
+
+Also: substeps run at 8 kHz, distal segment masses are floored well above
+anatomy, and joints warm-start from the previous frame. Forces are of order
+1e6 ug*mm^2/s^2 -- a fly weighs about a milligram, so values that look
+reasonable as bare numbers are a thousand times too small and the legs simply
+fold.
 
 ## Caveats
 
