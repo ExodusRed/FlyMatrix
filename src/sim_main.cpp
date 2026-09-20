@@ -73,6 +73,10 @@ struct Names {
         "  --duration MS      simulated milliseconds (default: 200)\n"
         "  --epsp MV          depolarisation per synapse (default: 0.275)\n"
         "  --dt MS            timestep (default: 0.1)\n"
+        "  --adapt MV         threshold rise per spike, 0 disables (default: 0.4)\n"
+        "  --tau-adapt MS     adaptation decay (default: 150)\n"
+        "  --size-exp E       size-scaled excitability, 0 disables (default: 0.5)\n"
+        "  --graded-rate HZ   graded output at threshold (default: 50)\n"
         "  --top N            how many active neurons to list (default: 25)\n"
         "  --targets N        also report the N strongest direct targets of the\n"
         "                     stimulated neurons, by connection weight\n"
@@ -119,6 +123,10 @@ int main(int argc, char** argv) {
         else if (a == "--duration") durationMs = argNum(argc, argv, i);
         else if (a == "--epsp") p.epspPerSynapse = static_cast<float>(argNum(argc, argv, i));
         else if (a == "--dt") p.dtMs = static_cast<float>(argNum(argc, argv, i));
+        else if (a == "--adapt") p.adaptIncrement = static_cast<float>(argNum(argc, argv, i));
+        else if (a == "--tau-adapt") p.tauAdapt = static_cast<float>(argNum(argc, argv, i));
+        else if (a == "--size-exp") p.sizeExponent = static_cast<float>(argNum(argc, argv, i));
+        else if (a == "--graded-rate") p.gradedRateAtThreshold = static_cast<float>(argNum(argc, argv, i));
         else if (a == "--top") top = static_cast<std::size_t>(argNum(argc, argv, i));
         else if (a == "--targets") nTargets = static_cast<std::size_t>(argNum(argc, argv, i));
         else if (a == "--list-types") listTypes = argStr(argc, argv, i);
@@ -146,10 +154,18 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        std::printf("connectome: %u neurons, %llu edges (weight >= %u)\n",
-                    conn.neuronCount(),
+        std::uint32_t nGraded = 0;
+        for (std::uint32_t i = 0; i < conn.neuronCount(); ++i) {
+            if (conn.isGraded(i)) ++nGraded;
+        }
+        std::printf("connectome: %u neurons (%u graded), %llu edges (weight >= %u)\n",
+                    conn.neuronCount(), nGraded,
                     static_cast<unsigned long long>(conn.edgeCount()),
                     conn.minWeight());
+        std::printf("model: adapt=%.2f mV/spike tau=%.0f ms, size-exp=%.2f, "
+                    "graded=%.0f Hz at threshold\n",
+                    p.adaptIncrement, p.tauAdapt, p.sizeExponent,
+                    p.gradedRateAtThreshold);
 
         fly::LIFNetwork net(conn, p);
 
@@ -182,17 +198,37 @@ int main(int argc, char** argv) {
 
         const auto steps = static_cast<std::uint64_t>(durationMs / p.dtMs);
         const auto t0 = std::chrono::steady_clock::now();
-        std::uint64_t totalSpikes = 0;
-        for (std::uint64_t s = 0; s < steps; ++s) totalSpikes += net.step().spikeCount;
+        std::uint64_t totalSpikes = 0, totalGradedUpdates = 0;
+        for (std::uint64_t s = 0; s < steps; ++s) {
+            const auto st = net.step();
+            totalSpikes += st.spikeCount;
+            totalGradedUpdates += st.gradedUpdates;
+        }
         const double wall = std::chrono::duration<double>(
                                 std::chrono::steady_clock::now() - t0).count();
 
         std::printf("\n%llu steps in %.2f s  (%.2fx real time)\n",
                     static_cast<unsigned long long>(steps), wall,
                     (durationMs / 1000.0) / (wall > 0 ? wall : 1e-9));
-        std::printf("%llu spikes total, mean rate %.2f Hz across the network\n\n",
+        std::printf("%llu spikes total, mean rate %.2f Hz across the network\n",
                     static_cast<unsigned long long>(totalSpikes),
                     totalSpikes / (conn.neuronCount() * durationMs / 1000.0));
+
+        if (nGraded > 0) {
+            const auto gout = net.gradedOutput();
+            double sum = 0.0, peak = 0.0;
+            std::size_t engaged = 0;
+            for (const auto j : net.gradedNeurons()) {
+                sum += gout[j];
+                peak = std::max(peak, static_cast<double>(gout[j]));
+                if (gout[j] > 0.5) ++engaged;
+            }
+            std::printf("graded: %zu of %u active, mean %.1f Hz-equiv, peak %.1f, "
+                        "%llu propagations\n",
+                        engaged, nGraded, sum / (nGraded ? nGraded : 1), peak,
+                        static_cast<unsigned long long>(totalGradedUpdates));
+        }
+        std::printf("\n");
 
         const auto totals = net.spikeTotals();
         std::vector<std::uint32_t> order(totals.size());

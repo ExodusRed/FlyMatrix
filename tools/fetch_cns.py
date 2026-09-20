@@ -71,7 +71,7 @@ def fetch_neurons() -> None:
             f"""MATCH (n:Neuron)
                 RETURN n.bodyId, n.somaLocation.x, n.somaLocation.y, n.somaLocation.z,
                        n.consensusNt, n.predictedNt, n.type, n.class, n.superclass,
-                       n.somaSide, n.pre, n.post
+                       n.somaSide, n.pre, n.post, n.size
                 ORDER BY n.bodyId SKIP {skip} LIMIT {NEURON_CHUNK}"""
         )
         rows.extend(batch)
@@ -84,6 +84,8 @@ def fetch_neurons() -> None:
     sign = np.zeros(n, np.int8)
     pre = np.zeros(n, np.int32)
     post = np.zeros(n, np.int32)
+    # Segmentation volume in voxels -- a proxy for membrane capacitance.
+    size = np.zeros(n, np.int64)
     types: list[str] = []
     classes: list[str] = []
     superclasses: list[str] = []
@@ -104,11 +106,13 @@ def fetch_neurons() -> None:
         soma_side.append(r[9] or "")
         pre[i] = r[10] or 0
         post[i] = r[11] or 0
+        size[i] = r[12] or 0
 
     RAW.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         out,
         body_id=body_id, pos=pos, nt_code=nt_code, sign=sign, pre=pre, post=post,
+        size=size,
         type=np.array(types), cls=np.array(classes),
         superclass=np.array(superclasses), soma_side=np.array(soma_side),
     )

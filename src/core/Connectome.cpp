@@ -9,7 +9,7 @@ namespace fly {
 namespace {
 
 constexpr char kMagic[8] = {'F', 'L', 'Y', 'C', 'N', 'S', '0', '1'};
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2;
 
 // Header is: magic[8], version u32, nNeurons u32, nEdges u64, minWeight u32,
 // pad u32, bbox f32[6].
@@ -78,6 +78,7 @@ Connectome Connectome::load(const std::string& binPath) {
 
     c.bodyIds_   = take<std::int64_t>(c.buffer_, off, n, "body_id");
     c.positions_ = take<Vec3>(c.buffer_, off, n, "pos");
+    c.sizeRel_   = take<float>(c.buffer_, off, n, "size_rel");
     c.ntCodes_   = take<std::uint8_t>(c.buffer_, off, n, "nt_code");
     c.signs_     = take<std::int8_t>(c.buffer_, off, n, "sign");
     c.flags_     = take<std::uint8_t>(c.buffer_, off, n, "flags");

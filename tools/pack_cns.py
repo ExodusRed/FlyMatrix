@@ -5,7 +5,7 @@ order.  Everything is little-endian; offsets are absolute byte positions so the
 loader can mmap and point at each array without parsing.
 
     magic      char[8]   "FLYCNS01"
-    version    u32       = 1
+    version    u32       = 2
     n_neurons  u32
     n_edges    u64
     min_weight u32
@@ -14,21 +14,28 @@ loader can mmap and point at each array without parsing.
     arrays:
       body_id   i64[N]     neuPrint bodyId, for round-tripping to the web UI
       pos       f32[N*3]   soma position in micrometres
+      size_rel  f32[N]     segmentation volume / median, proxy for capacitance
       nt_code   u8[N]      index into the neurotransmitter table
       sign      i8[N]      +1 excitatory, -1 inhibitory, 0 modulatory/unknown
-      flags     u8[N]      bit0: real soma (0 = position inferred)
+      flags     u8[N]      bit0: real soma (0 = inferred)
+                           bit1: graded -- releases continuously, never spikes
       _pad      u8[N]
       row_start u64[N+1]   CSR offsets into the edge arrays
       col       u32[E]     target neuron index
       weight    u16[E]     synapse count, saturated at 65535
 
+Array order matters: size_rel sits before the byte arrays so every array lands
+on its natural alignment regardless of N, which the C++ loader checks.
+
 Neuron names/types live alongside in cns_meta.json so the binary stays
 fixed-width.
 
 Usage:  python tools/pack_cns.py
+        python tools/pack_cns.py --graded-superclass ol_intrinsic
 """
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import struct
@@ -48,7 +55,18 @@ NM_PER_UM = 1000.0
 SCALE = VOXEL_NM / NM_PER_UM
 
 MAGIC = b"FLYCNS01"
-VERSION = 1
+VERSION = 2
+
+# Cell types modelled as graded (non-spiking): they release transmitter in
+# proportion to membrane depolarisation rather than emitting discrete spikes.
+#
+# This is a judgement call, not a dataset field. The lamina monopolar cells
+# L1-L5 are the best-established graded neurons present in this volume --
+# photoreceptors, the other classic example, sit in the retina and were not
+# imaged. Much of the rest of the optic lobe is graded or mixed, but where the
+# line falls is an open question, so the default stays conservative. Pass
+# --graded-superclass ol_intrinsic to treat the whole optic lobe as graded.
+DEFAULT_GRADED_TYPES = ["L1", "L2", "L3", "L4", "L5"]
 
 
 def log(msg: str) -> None:
@@ -117,7 +135,22 @@ def infer_missing_positions(pos: np.ndarray, col: np.ndarray,
     return out, known
 
 
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--graded-types", nargs="*", default=DEFAULT_GRADED_TYPES,
+                    metavar="TYPE",
+                    help="cell types to model as non-spiking "
+                         f"(default: {' '.join(DEFAULT_GRADED_TYPES)}); "
+                         "pass with no values to disable")
+    ap.add_argument("--graded-superclass", nargs="*", default=[], metavar="SC",
+                    help="whole superclasses to model as non-spiking, "
+                         "e.g. ol_intrinsic for the entire optic lobe")
+    return ap.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     nz = np.load(RAW / "neurons.npz", allow_pickle=False)
     body_id = nz["body_id"]
     n = len(body_id)
@@ -154,9 +187,27 @@ def main() -> None:
     pos_um = pos_vox * SCALE
     pos_um, had_soma = infer_missing_positions(pos_um, col, row_start)
 
-    flags = had_soma.astype(np.uint8)
+    # Relative cell size. Neurons with no recorded volume sit at the median so
+    # they are neither favoured nor penalised.
+    size = nz["size"].astype(np.float64)
+    median_size = float(np.median(size[size > 0])) if (size > 0).any() else 1.0
+    size_rel = np.where(size > 0, size / median_size, 1.0).astype(np.float32)
+
+    types = nz["type"]
+    supers = nz["superclass"]
+    graded = np.isin(types, args.graded_types)
+    if args.graded_superclass:
+        graded |= np.isin(supers, args.graded_superclass)
+
+    flags = had_soma.astype(np.uint8) | (graded.astype(np.uint8) << 1)
     finite = np.isfinite(pos_um).all(axis=1)
     bbox = np.concatenate([pos_um[finite].min(axis=0), pos_um[finite].max(axis=0)])
+
+    log(f"median cell size {median_size:,.0f} voxels; "
+        f"size_rel spans {size_rel.min():.3g}..{size_rel.max():.3g}")
+    log(f"{int(graded.sum()):,} neurons flagged graded "
+        f"({', '.join(args.graded_types) or 'none'}"
+        f"{' + superclass ' + ','.join(args.graded_superclass) if args.graded_superclass else ''})")
 
     BIN.mkdir(parents=True, exist_ok=True)
     out = BIN / "cns.bin"
@@ -168,6 +219,7 @@ def main() -> None:
         f.write(bbox.astype(np.float32).tobytes())
         f.write(body_id.astype(np.int64).tobytes())
         f.write(pos_um.astype(np.float32).tobytes())
+        f.write(size_rel.tobytes())
         f.write(nz["nt_code"].astype(np.uint8).tobytes())
         f.write(nz["sign"].astype(np.int8).tobytes())
         f.write(flags.tobytes())
@@ -186,13 +238,15 @@ def main() -> None:
         "bbox_um": [round(float(v), 1) for v in bbox],
         "nt_table": ["unknown", "acetylcholine", "glutamate", "gaba", "histamine",
                      "dopamine", "serotonin", "octopamine", "unclear"],
+        "median_size_voxels": median_size,
+        "graded_types": list(args.graded_types),
+        "graded_superclasses": list(args.graded_superclass),
+        "n_graded": int(graded.sum()),
     }
     (BIN / "cns_meta.json").write_text(json.dumps(meta))
 
     # Fixed-column sidecar so the C++ side can label neurons without pulling in
     # a JSON parser. One line per neuron, in dense-index order.
-    types = nz["type"]
-    supers = nz["superclass"]
     tab, nl = chr(9), chr(10)
     with open(BIN / "cns_names.tsv", "w", encoding="utf-8", newline=nl) as f:
         f.write(tab.join(["index", "body_id", "type", "superclass"]) + nl)

@@ -4,8 +4,8 @@ A leaky integrate-and-fire simulation of the adult *Drosophila* central nervous
 system, built on the Janelia **male-cns:v1.0** connectome — 176,422 neurons and
 ~25.9M synaptic connections spanning brain and ventral nerve cord.
 
-The end goal is an interactive 3D sandbox in C++. This repo gets there in
-stages; stage 1 and 2 are working.
+The end goal is an interactive 3D sandbox in C++. The data pipeline and
+simulation engine work; the renderer is not built yet.
 
 ## Layout
 
@@ -68,27 +68,67 @@ neurons) is excitatory, GABA and histamine inhibitory. The modulators
 (dopamine, serotonin, octopamine — about 3% of neurons) act on timescales this
 model does not represent, so their connections carry no current by default.
 
+### Beyond plain LIF
+
+Three additions go past the baseline model. One earned its place, one is
+useful but limited, and one is off by default because it failed its own test.
+
+**Spike-frequency adaptation** (on). Each spike raises that neuron's own
+threshold; the raise decays with a 150 ms time constant. Without it nothing
+stops a neuron pinning at the refractory ceiling — 410 Hz in the first version
+of this model, which no fly neuron does. It also measurably widens the usable
+range of synaptic gain (below). It does *not* rescue a badly over-set gain: at
+`--epsp 0.40` the network still saturates whatever the adaptation strength,
+because a neuron receiving 40 mV per presynaptic spike does not care about
+12 mV of accumulated threshold.
+
+**Graded transmission** (on, conservative). Neurons flagged graded release
+continuously in proportion to depolarisation and never spike. Output is
+expressed as the firing rate a spiking neuron would need to deliver the same
+current, so it shares the `--epsp` scale. Propagation is lazy — a graded
+neuron only touches its out-edges when its output moves more than
+`gradedDeltaHz` — which keeps it sparse instead of costing every edge every
+timestep.
+
+Only L1–L5 are flagged by default. That is a judgement call, not a dataset
+field: those lamina monopolar cells are the best-established graded neurons in
+this volume, photoreceptors were not imaged, and how far graded transmission
+extends into the medulla is genuinely unsettled. Pass
+`--graded-superclass ol_intrinsic` to `pack_cns.py` to treat the whole optic
+lobe that way.
+
+**Size-scaled excitability** (off). A bigger cell has more membrane to charge,
+so the same current should move it less; incoming steps get scaled by
+`size^-0.5`. It is implemented correctly — 96.5% of neurons are scaled
+smoothly, only 3.5% hit a clamp — and it is plausible physics. It just doesn't
+help. Enable it with `--size-exp 0.5`.
+
 ### Calibration
 
-`--epsp`, the depolarisation contributed per synapse, is the parameter that
-matters. Swept against this connectome with DNp01 driven for 100 ms:
+`--epsp`, the depolarisation per synapse, is the parameter that matters. What
+matters more than its value is how much room there is around it. `tools/sweep.py`
+bisects for the gain at which the network enters and leaves a plausible regime
+(0.5–5 Hz mean rate), driving DNp01 for 100 ms:
 
-| epsp (mV) | network rate | neurons active |
-|-----------|--------------|----------------|
-| 0.05      | 0.02 Hz      | 0.1%           |
-| 0.06      | 0.03 Hz      | 0.1%           |
-| **0.08**  | **1.80 Hz**  | **4.5%**       |
-| 0.10      | 9.33 Hz      | 12.1%          |
-| 0.275     | 37.09 Hz     | 25.7%          |
+| variant | band lower | band upper | width |
+|---------|-----------:|-----------:|------:|
+| baseline (neither) | 0.0616 | 0.0986 | 1.60× |
+| **adaptation only (default)** | **0.0648** | **0.1160** | **1.79×** |
+| size scaling only | 0.1959 | 0.2766 | 1.41× |
+| both | 0.1967 | 0.2857 | 1.45× |
 
-The transition is sharp. Below ~0.06 an evoked cascade dies out; above ~0.1 the
-network runs away and neurons pin at the refractory ceiling (~450 Hz), which is
-well outside anything a fly does. 0.08 is the default. Note the dip at 0.085 in
-a finer sweep — inhibition biting back is a sign the E/I balance is doing real
-work rather than the network simply scaling with gain.
+Adaptation widens the band by 12%. Size scaling narrows it by 12% — it shifts
+where the band sits without making the network any less precarious, which is
+why it ships disabled. The default `--epsp 0.085` is the geometric centre of
+the winning row.
 
-This number is not transferable. It depends on the weight threshold used at
-download time, and it would change for a different dataset.
+Note how narrow all of these are. Even the best is under 2×: double the
+synaptic gain and the model goes from silent to saturated. That fragility is
+worth keeping in mind before reading much into any single run, and it is a
+real property of connectome LIF models rather than a defect of this one.
+
+None of these numbers transfer. They depend on the weight threshold used at
+download time and would change for a different dataset.
 
 ## Validating against known anatomy
 
@@ -102,26 +142,41 @@ circuit:
 ```
 rank  bodyId       type          superclass       synapses   spikes
 1     800146       TTMn          vnc_motor              70       14
-2     800178       IN11A001      vnc_intrinsic          32        9
-7     802799       GFC2          vnc_intrinsic          21       14
+2     800178       IN11A001      vnc_intrinsic          32        7
+3     802471       IN18B031      vnc_intrinsic          26        9
+7     802799       GFC2          vnc_intrinsic          21        9
+9     802478       GFC2          vnc_intrinsic          20        7
 ```
 
 TTMn is the tergotrochanteral motor neuron that fires the jump muscle, and GFC2
 the giant-fibre coupled interneurons — which is what the giant fibre is
 supposed to drive.
 
+Ranking the whole network by spike count tells the same story from the other
+direction. The top of that list is five **DLMn** — the dorsal longitudinal
+muscle motor neurons that depress the wings — alongside lateral horn and
+ascending neurons. Jump plus wing depression is the takeoff sequence, and none
+of it was put in by hand.
+
 Two things worth knowing about this readout:
 
-- **Rank by spike count is misleading in a recurrent network.** The overall
-  top-25 for this run is dominated by AVLP neurons, which are *not* downstream
-  of DNp01 — the anterior ventrolateral protocerebrum is densely recurrent, so
-  once seeded it sustains itself and drowns out the actual escape pathway.
-  `--targets` walks the out-edges instead, so a silent target reads as a zero
-  rather than simply being absent.
+- **Rank by spike count can mislead, and did.** Before spike-frequency
+  adaptation was added, the top 25 for this run was dominated by AVLP neurons
+  that are *not* downstream of DNp01 — the anterior ventrolateral
+  protocerebrum is recurrent enough to sustain itself once seeded, and it
+  drowned out the real pathway. Adaptation damped that, and the ranking now
+  agrees with the anatomy. The lesson survives the fix: `--targets` walks the
+  out-edges, so a silent target reads as a zero rather than being absent, and
+  it does not care what else is loud.
 - **One spike is not enough.** DNp01's strongest connection is 70 synapses, or
-  5.6 mV at the default gain, against a 7 mV threshold. TTMn only fires because
-  DNp01 is driven repeatedly. That is a real property of the model, and it is
-  why coincidence matters here.
+  about 6 mV at the default gain, against a 7 mV threshold. TTMn only fires
+  because DNp01 is driven repeatedly. That is a real property of the model, and
+  it is why coincidence matters here.
+
+A second check, on the graded side: driving L2 (cholinergic, non-spiking)
+excites Tm1 and Tm2, which is the well-described first stage of the motion
+vision pathway. Driving L1 instead produces silence, because L1 is
+glutamatergic and therefore inhibitory under the sign rule above.
 
 Stimulating TTMn itself produces nothing downstream, which is the correct
 negative control: motor neurons terminate on muscle, and muscle is not in the

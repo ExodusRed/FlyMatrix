@@ -38,9 +38,21 @@ public:
     std::span<const std::uint8_t> ntCodes() const { return ntCodes_; }
     // +1 excitatory, -1 inhibitory, 0 modulatory or unresolved.
     std::span<const std::int8_t> signs() const { return signs_; }
-    // bit0 set when the position came from a real soma rather than being
-    // inferred from graph neighbours.
     std::span<const std::uint8_t> flags() const { return flags_; }
+    // Segmentation volume relative to the population median. Stands in for
+    // membrane capacitance: a bigger cell needs more charge to shift the same
+    // amount of voltage.
+    std::span<const float> sizeRel() const { return sizeRel_; }
+
+    static constexpr std::uint8_t kFlagRealSoma = 1u << 0;
+    static constexpr std::uint8_t kFlagGraded = 1u << 1;
+
+    // Position came from an imaged soma rather than being inferred from graph
+    // neighbours.
+    bool hasRealSoma(std::uint32_t i) const { return flags_[i] & kFlagRealSoma; }
+    // Releases transmitter continuously in proportion to depolarisation
+    // instead of emitting discrete spikes.
+    bool isGraded(std::uint32_t i) const { return flags_[i] & kFlagGraded; }
 
     std::span<const std::uint64_t> rowStart() const { return rowStart_; }
     std::span<const std::uint32_t> col() const { return col_; }
@@ -70,6 +82,7 @@ private:
 
     std::span<const std::int64_t> bodyIds_;
     std::span<const Vec3> positions_;
+    std::span<const float> sizeRel_;
     std::span<const std::uint8_t> ntCodes_;
     std::span<const std::int8_t> signs_;
     std::span<const std::uint8_t> flags_;
