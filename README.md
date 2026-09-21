@@ -341,65 +341,100 @@ Gait is not.
 ## Physics, and the escape jump
 
 ```sh
+./build/Release/flyphys                  # mechanics only, no connectome, runs in ms
+./build/Release/flyphys --trace FTi -15  # time series for one forced joint
 ./build/Release/flybody                  # fires the giant fibre
 ./build/Release/flybody --drop 250       # same, headless, prints the trace
-./build/Release/flybody --no-physics     # set joint angles directly instead
 ```
 
-The body is now 33 rigid bodies held together by 34 hinge constraints, solved
-in maximal coordinates with sequential impulses, standing on a ground plane
-with friction. Muscle activation becomes joint torque rather than a joint
-angle, so the body decides what happens.
+The body is 33 rigid bodies held by 34 constraints, solved in maximal
+coordinates with sequential impulses, standing on a ground plane with
+friction. Muscle activation becomes joint torque, so the body decides what
+happens.
 
-Firing the giant fibre makes the fly jump, and the controls are clean:
+    stands   0.578 mm on six feet, level to within 1 degree, no drift to 1 s
+    jumps    3.12 mm peak when the giant fibre fires
 
-| stimulus | peak height | leaves the ground |
-|----------|------------:|-------------------|
-| none | 0.62 mm | no |
-| optic lobe (L2) | 0.62 mm | no |
-| knee flexor | 0.62 mm | no |
-| **giant fibre (DNp01)** | **0.94 mm** | **yes** |
+A real *Drosophila* takes off at around 0.3 m/s, about 4.6 mm ballistic, so
+the jump is the right order of magnitude.
 
-Every link in that is real except the physics: DNp01 fires TTMn, TTMn is in the
-coxa-trochanter extensor pool because the connectome names it that way, and
-that pool's torque pushes the leg against the ground.
+### How the joints are driven
 
-Worth noting that L2 reached a *higher* coxa-trochanter activation than the
-giant fibre did and still did not jump. It is not raw activation that launches
-the fly, it is which muscles fire together.
+Each hinge has a **posture servo** and a **muscle**, and they are deliberately
+different things.
 
-### What is honest about this and what is not
+The servo holds the joint's rest angle. It is solved as a velocity constraint
+with a bounded impulse, not applied as a spring torque. An explicit spring
+cannot be made strong enough to hold the fly up before it goes unstable:
+raising its stiffness seventeen-fold made the proximal joints sag *further*,
+from 0.35 rad to 0.87, because it had passed the timestep's stability limit
+and was injecting energy. As a constraint it is stable at any strength.
 
-- **The jump strength is tuned, not derived.** Below about 20x the fly never
-  leaves the ground. Some of that is fair -- the tergotrochanteral muscle
-  really is exceptional -- but part is an artefact: TTMn is 2 neurons inside a
-  pool of ~18, and averaging the pool dilutes the one muscle that matters.
-- **The timing is wrong.** A real escape takeoff is over in about 5 ms. Here
-  the fly sinks for 160 ms and then launches, because muscle activation has a
-  30 ms time constant and nothing models a fast-twitch muscle.
-- **It tumbles afterwards.** There is no righting reflex, no wings, and no air.
+The servo's gain is a fraction of error corrected *per substep*, not an
+absolute rate. An absolute rate does not scale with the timestep, so it
+corrects a fixed amount per second while gravity disturbs the joint every
+substep; it was about 180x too weak, which is why adding torque changed
+nothing at all.
 
-### What the solver needed
+The muscle adds a bounded contraction impulse inside the same solver loop.
+It was originally a feed-forward torque, which was big enough to pull the
+joint anchors apart faster than the solver could close them. A muscle cannot
+dislocate the joint it pulls on, and making it a constraint enforces that.
 
-Maximal coordinates on a 30-link chain behaves exactly as advertised, and two
-mitigations were not optional:
+A driven joint also gives up its postural hold in proportion to drive
+(**antagonist relaxation**). Without it the muscle has to overpower a rigid
+servo, which makes the response a threshold rather than a gradient: below it
+nothing moves, just above it the fly launches sixteen millimetres.
 
-- **Inertia aspect ratio is clamped to 4:1.** A thin segment's inertia about
-  its own long axis is a hundredth of its inertia across it, and explicit
-  damping is stable only for `dt < 2I/c`, so that one tiny principal moment set
-  the timestep for the entire simulation -- and the trochanter-femur joint
-  twists about exactly that axis.
-- **Velocities are clamped.** A large muscle torque on a light distal segment
-  produced 4,500 rad/s in a single substep, which no number of solver
-  iterations can reconcile; the scene reached 1e20 mm and stayed finite, so it
-  slipped past a NaN check. Clamping silently discards momentum. It is a crude
-  fix and the honest description of it is that it bounds the damage.
+### Position correction
 
-Also: substeps run at 8 kHz, distal segment masses are floored well above
-anatomy, and joints warm-start from the previous frame. Forces are of order
-1e6 ug*mm^2/s^2 -- a fly weighs about a milligram, so values that look
-reasonable as bare numbers are a thousand times too small and the legs simply
-fold.
+Constraints solve velocity with no positional bias. Position error is carried
+by a parallel set of pseudo-velocities that move the bodies during integration
+and are then discarded, so a correction never becomes momentum.
+
+That change also produced the most instructive failure in the project. The fly
+climbed past 300 mm at a constant 940 mm/s with **zero ground contacts**, never
+decelerating. A position correction is not velocity, so gravity cannot oppose
+it, and joint error recreated every substep became a steady upward teleport.
+`maxCorrectionVelocity` caps it.
+
+### flyphys
+
+The mechanics harness loads no connectome and runs in milliseconds, so the
+question "is this the neurons, the muscles, the solver or the geometry?" can
+be answered instead of guessed at. It states what working means as a test --
+six feet down, no trunk touching, ride height above 0.52 mm, pitch within two
+degrees -- and reports per-joint response, constraint violation, weld slip,
+body pitch, per-leg compression, and which joints can lift the body.
+
+Nearly every fix in this file came from it. The body settling onto its
+abdomen looked like a mass-distribution problem and was actually two solver
+defaults being too soft for a five-link chain (iterations 24 to 64, Baumgarte
+0.2 to 0.7): every leg was losing 0.07-0.11 mm of span while its joints held
+to within 0.001 rad, so the linkage was being compressed rather than bent.
+
+Two things it disproved, recorded so they are not retried. Alternating the
+Gauss-Seidel sweep direction, the textbook remedy for slow convergence along a
+chain, made things consistently worse. And an apparent 79 um of weld slip was
+5.8 degrees of body pitch the whole time -- a raw height difference cannot
+tell the two apart, and a constraint was nearly rewritten to fix a measurement
+artefact.
+
+### What does not work yet
+
+- **The jump is not specific.** Driving the optic lobe reaches 14 mm against
+  the giant fibre's 3.1 mm. Both activate the same jump muscle to a similar
+  torque, but the giant fibre delivers a brief burst while broad stimulation
+  drives it bilaterally and continuously, and over a 250 ms window sustained
+  wins. Until this is resolved the jump demonstrates that the mechanics work,
+  not that the escape circuit is what drives them.
+- **Sustained maximal drive drifts.** Past about a second of continuous
+  activation the body creeps upward. A real escape is a brief burst, and the
+  neural model's endless firing is the unphysical part, but a solver should
+  not drift regardless.
+- **Landing tunnels.** Coming down fast the trunk can pass through the floor;
+  contacts are point probes with no swept test.
+- **Slow.** 64 iterations at an 8 kHz substep is far from real time.
 
 ## Caveats
 

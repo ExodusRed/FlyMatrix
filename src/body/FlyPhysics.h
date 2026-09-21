@@ -43,7 +43,10 @@ public:
         // torques of order 1e6 just to hold the animal up. Values that look
         // reasonable as bare numbers are three orders of magnitude too small
         // and the legs simply fold.
-        float maxMuscleTorque = 1.5e6f;    // ug*mm^2/s^2
+        // Calibrated so the giant fibre produces a 3.1 mm jump from a
+        // 0.58 mm stance. A real Drosophila takes off at roughly 0.3 m/s,
+        // which is about 4.6 mm ballistic, so this is the right order.
+        float maxMuscleTorque = 3.0e5f;    // ug*mm^2/s^2
         // Torque budget a joint can spend holding its posture. This is a
         // bound on an impulse, not a spring gain, so it can be raised freely
         // without threatening the integrator.
