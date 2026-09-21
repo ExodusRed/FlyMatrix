@@ -420,14 +420,46 @@ chain, made things consistently worse. And an apparent 79 um of weld slip was
 tell the two apart, and a constraint was nearly rewritten to fix a measurement
 artefact.
 
+### Is the jump specific to the escape circuit?
+
+Partly, and the answer depends entirely on how hard the network is driven.
+
+Driven at a physiological level -- one or two neurons, which is what a single
+cell type like DNp01 amounts to -- the answer is yes:
+
+| stimulus | neurons | peak |
+|----------|--------:|-----:|
+| MBON01, MBON04, APL, KC | 2 each | 0.62 mm, no jump |
+| DNp04 (descending) | 2 | 1.04 mm |
+| **DNp01, the giant fibre** | **1** | **3.12 mm** |
+| DNp03 (descending) | 2 | 5.14 mm |
+| DNp09 (descending) | 2 | 24.8 mm |
+
+Descending neurons, which are the cells that carry motor commands from brain
+to nerve cord, move the fly. Mushroom body output neurons, Kenyon cells and
+the APL giant interneuron, driven identically, do not move it at all. That is
+the right answer and nothing in the bridge was told about it.
+
+Driven supraphysiologically the answer is no. Stimulating 200 or more neurons
+of *any* type launches the fly 14-25 mm, olfactory receptors and Kenyon cells
+included. Flooding a network whose motor pools contain a very strong jump
+muscle extends every coxa-trochanter joint at once, and the circuit stops
+mattering.
+
+This is worth stating plainly because an earlier version of this README
+claimed specificity had failed outright, on the strength of a single control
+that drove 1,779 optic lobe cells. That control was badly chosen twice over:
+the stimulus was enormous, and looming-evoked escape is a real pathway, so an
+optic lobe cell is not a negative control at all. Matching the stimulus size
+and picking populations with no route to leg motor neurons gave the opposite
+result.
+
+DNp09 reaching 24.8 mm from two neurons is not right either. It is a
+descending neuron so movement is expected, but the magnitude is not.
+
 ### What does not work yet
 
-- **The jump is not specific.** Driving the optic lobe reaches 14 mm against
-  the giant fibre's 3.1 mm. Both activate the same jump muscle to a similar
-  torque, but the giant fibre delivers a brief burst while broad stimulation
-  drives it bilaterally and continuously, and over a 250 ms window sustained
-  wins. Until this is resolved the jump demonstrates that the mechanics work,
-  not that the escape circuit is what drives them.
+- **Supraphysiological drive is not specific**, as above.
 - **Sustained maximal drive drifts.** Past about a second of continuous
   activation the body creeps upward. A real escape is a brief burst, and the
   neural model's endless firing is the unphysical part, but a solver should
