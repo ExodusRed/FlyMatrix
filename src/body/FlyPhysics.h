@@ -31,7 +31,9 @@ public:
         float minSegmentMass = 12.0f;
         float segmentMassScale = 1.0f;
 
-        // Muscle strength: peak torque one fully activated pool can produce.
+        // Torque produced by a postural muscle at full activation. Individual
+        // muscles scale this by their own strength (see MotorPools), so the
+        // jump muscle needs no special case here.
         //
         // Scale matters here. The fly weighs about 1 mg, so its weight is
         // ~1e7 ug*mm/s^2, and a leg joint with a ~0.5 mm moment arm needs
@@ -39,21 +41,27 @@ public:
         // reasonable as bare numbers are three orders of magnitude too small
         // and the legs simply fold.
         float maxMuscleTorque = 1.5e6f;    // ug*mm^2/s^2
-        // The jump muscle is in a class of its own -- the tergotrochanteral
-        // muscle drives one of the most powerful movements a fly makes.
-        //
-        // This multiplier is tuned, not derived: below about 20 the fly never
-        // leaves the ground. Part of the reason it has to be so large is that
-        // TTMn is only 2 neurons inside a coxa-trochanter pool of ~18, so
-        // averaging the pool dilutes the one muscle that matters.
-        float jumpTorqueScale = 60.0f;
-        // Passive joint stiffness holds the rest posture when no muscle is
-        // driving, standing in for cuticle elasticity and resting muscle tone.
-        float jointStiffness = 3.0e6f;
-        float jointDamping = 400.0f;
+        // Torque budget a joint can spend holding its posture. This is a
+        // bound on an impulse, not a spring gain, so it can be raised freely
+        // without threatening the integrator.
+        float postureTorque = 6.0e6f;
+        // Fraction of joint angle error corrected per substep.
+        float servoRate = 0.9f;
+        float jointDamping = 0.6f;
+        // Extra torque a fully activated muscle adds on top of posture, and
+        // how far it shifts the joint's target angle.
+        float muscleExcursionRad = 0.9f;
 
         // 8 kHz keeps the stiff joint springs inside their stability limit;
         // at 4 kHz the solver diverges within a couple of milliseconds.
+        // Diagnostic: when forceJoint is a valid joint index, every leg's
+        // joint of that kind is driven with this constant value instead of by
+        // the nervous system. Isolates the mechanics, which is the only way to
+        // answer "can this joint lift the body at all" without guessing at
+        // sign conventions.
+        int forceJoint = -1;
+        float forceDrive = 0.0f;
+
         float substepHz = 8000.0f;  // physics steps per simulated second
     };
 
@@ -64,9 +72,17 @@ public:
     // Advance by dt seconds, driving joints from the current muscle
     // activations. Runs several substeps internally.
     void step(float dtSeconds, const MotorPools& pools);
+    // Mechanics-only step: drives nothing except the diagnostic
+    // forceJoint, so the body can be probed without a nervous system.
+    void step(float dtSeconds);
 
     // Copy the solved body poses back out for drawing.
     void readPose(std::vector<FlyBody::SegmentPose>& out) const;
+
+    // Solved angle of one joint, in radians from the built pose.
+    float jointAngle(int leg, int joint) const {
+        return world.jointAngle(world.joints[jointIndex_[leg][joint]]);
+    }
 
     const RigidBody& thorax() const { return world.bodies[thorax_]; }
     float bodyHeight() const { return world.bodies[thorax_].position.z; }
@@ -80,6 +96,9 @@ public:
     PhysicsWorld world;
 
 private:
+    void advance(float dtSeconds);
+    void applyDrive(HingeJoint& hj, float restAngle, float drive) const;
+
     struct SegmentRef {
         std::uint32_t body;
         float length;

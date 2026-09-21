@@ -31,6 +31,13 @@ add_library(flycore STATIC
 )
 target_include_directories(flycore PUBLIC src)
 
+# Mechanics-only harness. Links flycore but touches no connectome data, so it
+# runs in milliseconds and isolates the body from the nervous system.
+add_executable(flyphys src/phys_test.cpp)
+target_link_libraries(flyphys PRIVATE flycore)
+set_target_properties(flyphys PROPERTIES
+  VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
 add_executable(flysim src/sim_main.cpp)
 target_link_libraries(flysim PRIVATE flycore)
 

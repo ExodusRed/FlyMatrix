@@ -30,8 +30,8 @@ LEGS = [
 
 # Axes for a left leg, in the order ThC, CTr, TrF, FTi, TiTa.
 AXES = np.array([
-    [0.0, 1.0, 0.0],   # ThC  lateral: swings fore and aft
-    [1.0, 0.0, 0.0],   # CTr  fore-aft: lifts and lowers
+    [1.0, 0.0, 0.0],   # ThC  fore-aft axis: abducts the leg from the body
+    [0.0, 1.0, 0.0],   # CTr  lateral axis: depresses the femur -- the power joint
     [0.0, 0.0, 1.0],   # TrF  vertical: twists the femur
     [0.0, 1.0, 0.0],   # FTi  lateral: the knee
     [0.0, 1.0, 0.0],   # TiTa lateral: the ankle
@@ -49,8 +49,8 @@ AXES = np.array([
 # tibia swinging back and the hind legs with it swinging forward, so forcing
 # one sign made the hind leg's knee undo its own backward reach.
 LIMITS = np.array([
-    [-1.05, 1.05],
     [-0.4, 1.6],
+    [-1.6, 1.6],
     [-0.9, 0.9],
     [-2.6, 2.6],
     [-1.2, 1.5],
@@ -116,26 +116,40 @@ def solve(attach, lengths, target, seed):
 
 
 def main() -> None:
-    # A plausible starting posture: leg swung out, knee bent.
-    seed = np.array([0.0, 0.62, 0.0, -0.95, 0.45])
-    # Front knees fold one way, hind knees the other.
-    knee_seed = {"front": -1.6, "middle": -1.9, "hind": 1.9}
-
-    print(f"body at z = {BODY_Z}, ground at z = {GROUND_Z}\n")
+    print(f"body at z = {BODY_Z}, ground at z = {GROUND_Z}")
     results = {}
     for name, attach_x, scale, target in LEGS:
         attach = (attach_x, BODY_RADIUS * 0.75, BODY_Z - BODY_RADIUS * 0.35)
         lengths = np.array([SEG["coxa"], SEG["troch"], SEG["femur"],
                             SEG["tibia"], SEG["tarsus"]]) * scale
-        s = seed.copy()
-        s[0] = {"front": 0.2, "middle": 0.6, "hind": 0.9}[name]
-        s[3] = knee_seed[name]
-        angles = solve(attach, lengths, np.array(target, dtype=float), s)
+
+        # Five joints reaching a three-dimensional target is redundant, so the
+        # solution found depends on where the search starts. Rather than guess
+        # a posture per leg, try a spread of them and keep whichever lands
+        # closest. A leg that ends up with three joints jammed against their
+        # limits means the starting posture was wrong, not the target.
+        best, best_score = None, float("inf")
+        for thc in (0.3, 0.6, 0.9):
+            for ctr in (-0.6, 0.0, 0.6):
+                for knee in (-2.0, -1.2, 1.2, 2.0):
+                    seed = np.array([thc, ctr, 0.0, knee, 0.4])
+                    angles = solve(attach, lengths, np.array(target, float), seed)
+                    err = np.linalg.norm(
+                        foot_position(angles, attach, lengths) - np.array(target))
+                    margin = np.min(np.minimum(angles - LIMITS[:, 0],
+                                               LIMITS[:, 1] - angles))
+                    # Penalise solutions pressed against a joint limit.
+                    score = err + max(0.0, 0.05 - margin) * 2.0
+                    if score < best_score:
+                        best, best_score = angles, score
+
+        angles = best
         foot = foot_position(angles, attach, lengths)
         err = np.linalg.norm(foot - np.array(target))
+        margin = np.min(np.minimum(angles - LIMITS[:, 0], LIMITS[:, 1] - angles))
         results[name] = angles
         print(f"{name:<7} foot = ({foot[0]:+.3f}, {foot[1]:+.3f}, {foot[2]:+.3f})"
-              f"   target error {err*1000:.2f} um")
+              f"   error {err*1000:6.1f} um   limit margin {margin:.3f} rad")
 
     print("\nrest angles, radians:")
     print(f"  {'leg':<8}" + "".join(f"{j:>9}" for j in JOINT_NAMES))

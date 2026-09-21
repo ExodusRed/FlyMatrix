@@ -74,6 +74,11 @@ void PhysicsWorld::prepare() {
         // reads as zero regardless of how the two bodies are oriented.
         const M3 rb = M3::fromQuat(B.orientation);
         j.refB = rb.transposed() * worldRefA;
+
+        // A weld remembers the relative orientation it must maintain.
+        const Quat conjA{A.orientation.w, -A.orientation.x, -A.orientation.y,
+                         -A.orientation.z};
+        j.weldRest = (conjA * B.orientation).normalised();
     }
 }
 
@@ -90,6 +95,18 @@ float PhysicsWorld::jointAngle(const HingeJoint& j) const {
     const float c = std::clamp(dot(pa, pb), -1.0f, 1.0f);
     const float s = dot(cross(pa, pb), axis);
     return std::atan2(s, c);
+}
+
+float PhysicsWorld::maxAnchorError() const {
+    float worst = 0.0f;
+    for (const auto& j : joints) {
+        const RigidBody& A = bodies[j.a];
+        const RigidBody& B = bodies[j.b];
+        const V3 pA = A.position + A.orientation.rotate(j.anchorA);
+        const V3 pB = B.position + B.orientation.rotate(j.anchorB);
+        worst = std::max(worst, length(pB - pA));
+    }
+    return worst;
 }
 
 void PhysicsWorld::integrateVelocities(float dt) {
@@ -115,36 +132,7 @@ void PhysicsWorld::integrateVelocities(float dt) {
 void PhysicsWorld::solveJoints(float dt) {
     const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
 
-    for (auto& j : joints) {
-        RigidBody& A = bodies[j.a];
-        RigidBody& B = bodies[j.b];
-
-        // Motor and passive spring act about the hinge axis. This is where a
-        // muscle's force enters the simulation.
-        const V3 axis = normalise(A.orientation.rotate(j.axisA));
-        const float angle = jointAngle(j);
-        const float relSpin = dot(B.angularVelocity - A.angularVelocity, axis);
-        float t = j.motorTorque
-                  + j.stiffness * (j.restAngle - angle)
-                  - j.damping * relSpin;
-        // A joint driven past its limit gets pushed back hard, which is
-        // cheaper and steadier than adding a separate limit constraint.
-        if (angle < j.minAngle) t += j.stiffness * 8.0f * (j.minAngle - angle);
-        if (angle > j.maxAngle) t += j.stiffness * 8.0f * (j.maxAngle - angle);
-
-        const V3 torque = axis * t;
-        A.angularVelocity += A.invInertiaWorld() * (-torque) * dt;
-        B.angularVelocity += B.invInertiaWorld() * torque * dt;
-
-        // Re-clamp here as well: the motor is applied after integrateVelocities
-        // has already clamped, and it is the largest single impulse in the step.
-        for (RigidBody* b : {&A, &B}) {
-            const float av = length(b->angularVelocity);
-            if (av > params.maxAngularVelocity) {
-                b->angularVelocity = b->angularVelocity * (params.maxAngularVelocity / av);
-            }
-        }
-    }
+    for (auto& j : joints) j.servoImpulse = 0.0f;
 
     // Warm start: replay the impulse that held this joint together last step.
     // Without it a standing pose is re-solved from nothing every frame and the
@@ -164,8 +152,113 @@ void PhysicsWorld::solveJoints(float dt) {
             RigidBody& A = bodies[j.a];
             RigidBody& B = bodies[j.b];
 
-            // --- angular part: keep the two axes parallel ---
+            // --- servo: drive the hinge toward its target angle ---
+            //
+            // Solved as a velocity constraint with a bounded impulse rather
+            // than applied as a torque. The bound is what gives a joint finite
+            // strength: it can be made arbitrarily strong without the
+            // integrator ever seeing a stiff force.
+            if (j.maxTorque > 0.0f) {
+                const V3 axis = normalise(A.orientation.rotate(j.axisA));
+                const float target = std::clamp(j.targetAngle, j.minAngle, j.maxAngle);
+                const float angle = jointAngle(j);
+
+                const M3 ia = A.invInertiaWorld();
+                const M3 ib = B.invInertiaWorld();
+                const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                if (eff > 1e-12f) {
+                    const float relSpin =
+                        dot(B.angularVelocity - A.angularVelocity, axis);
+
+                    const float want = j.servoRate * (target - angle) * invDt;
+                    float lambda = (want - relSpin * (1.0f + j.damping)) / eff;
+
+                    const float maxImp = j.maxTorque * dt;
+                    const float old = j.servoImpulse;
+                    j.servoImpulse = std::clamp(old + lambda, -maxImp, maxImp);
+                    lambda = j.servoImpulse - old;
+
+                    const V3 imp = axis * lambda;
+                    A.angularVelocity += ia * (-imp);
+                    B.angularVelocity += ib * imp;
+                }
+            }
+
+            // --- hard joint limit ---
+            //
+            // The servo alone cannot hold a limit: it clamps its own target
+            // but nothing stops the joint physically rotating past it, and a
+            // bounded impulse loses to gravity eventually. Once a joint passes
+            // +/-pi the atan2 angle wraps, the servo's error changes sign, and
+            // it drives the joint further -- a runaway that scrambled the leg
+            // in the first 20 ms and dropped the fly on its belly.
+            //
+            // This is a one-sided constraint: it only ever pushes back into
+            // range, never pulls, and its impulse is unbounded because a joint
+            // stop is structural rather than muscular.
             {
+                const float angle = jointAngle(j);
+                float violation = 0.0f;
+                if (angle < j.minAngle) violation = j.minAngle - angle;
+                else if (angle > j.maxAngle) violation = j.maxAngle - angle;
+
+                if (violation != 0.0f) {
+                    const V3 axis = normalise(A.orientation.rotate(j.axisA));
+                    const M3 ia = A.invInertiaWorld();
+                    const M3 ib = B.invInertiaWorld();
+                    const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                    if (eff > 1e-12f) {
+                        const float relSpin =
+                            dot(B.angularVelocity - A.angularVelocity, axis);
+                        // Push back toward the limit, and cancel any velocity
+                        // still carrying the joint outward.
+                        const float bias = violation * invDt * params.baumgarte;
+                        const float outward =
+                            (violation > 0.0f) ? std::min(relSpin, 0.0f)
+                                               : std::max(relSpin, 0.0f);
+                        const float lambda = (bias - outward) / eff;
+
+                        const V3 imp = axis * lambda;
+                        A.angularVelocity += ia * (-imp);
+                        B.angularVelocity += ib * imp;
+                    }
+                }
+            }
+
+            // --- weld: lock all three rotational degrees of freedom ---
+            if (j.weld) {
+                // Orientation error as a rotation vector. For a unit error
+                // quaternion the vector part is half the rotation angle times
+                // the axis, so 2*xyz is the small-angle rotation vector.
+                const Quat conjA{A.orientation.w, -A.orientation.x,
+                                 -A.orientation.y, -A.orientation.z};
+                const Quat want = (A.orientation * j.weldRest).normalised();
+                const Quat conjWant{want.w, -want.x, -want.y, -want.z};
+                Quat err = (conjWant * B.orientation).normalised();
+                if (err.w < 0.0f) {  // shortest arc
+                    err = {-err.w, -err.x, -err.y, -err.z};
+                }
+                const V3 errVec{2.0f * err.x, 2.0f * err.y, 2.0f * err.z};
+                (void)conjA;
+
+                const M3 ia = A.invInertiaWorld();
+                const M3 ib = B.invInertiaWorld();
+                const V3 relOmega = B.angularVelocity - A.angularVelocity;
+
+                const V3 basis[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+                for (const V3& t : basis) {
+                    const float eff = dot(t, ia * t) + dot(t, ib * t);
+                    if (eff < 1e-12f) continue;
+                    const float bias = params.baumgarte * invDt * dot(errVec, t);
+                    const float lambda = -(dot(relOmega, t) + bias) / eff;
+                    const V3 imp = t * lambda;
+                    A.angularVelocity += ia * (-imp);
+                    B.angularVelocity += ib * imp;
+                }
+            }
+
+            // --- angular part: keep the two axes parallel ---
+            if (!j.weld) {
                 const V3 axA = normalise(A.orientation.rotate(j.axisA));
                 const V3 axB = normalise(B.orientation.rotate(j.axisB));
                 const V3 t1 = perpendicular(axA);

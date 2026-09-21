@@ -144,7 +144,6 @@ void printHelp() {
         "  --dump-pose        print the rest pose and exit\n"
         "  --no-physics       set joint angles directly instead of simulating\n"
         "  --drop MS          run physics headlessly for MS and report\n"
-        "  --jump-scale X     jump muscle strength multiplier (default: 8)\n"
         "  --muscle-torque X  peak torque per muscle pool\n\n"
         "controls\n"
         "  left drag   orbit          scroll  zoom         right drag  pan\n"
@@ -192,8 +191,9 @@ int run(int argc, char** argv) {
     bool dumpPose = false;
     bool usePhysics = true;
     float dropMs = 0.0f;
-    float jumpScale = -1.0f;
     float muscleTorque = -1.0f;
+    int forceJoint = -1;
+    float forceDrive = 0.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -213,8 +213,15 @@ int run(int argc, char** argv) {
         else if (a == "--dump-pose") dumpPose = true;
         else if (a == "--no-physics") usePhysics = false;
         else if (a == "--drop") dropMs = std::stof(next("--drop"));
-        else if (a == "--jump-scale") jumpScale = std::stof(next("--jump-scale"));
         else if (a == "--muscle-torque") muscleTorque = std::stof(next("--muscle-torque"));
+        else if (a == "--force-joint") {
+            const std::string jn = next("--force-joint");
+            for (int j = 0; j < kJointCount; ++j) {
+                if (jn == jointName(static_cast<Joint>(j))) forceJoint = j;
+            }
+            if (forceJoint < 0) throw std::runtime_error("unknown joint: " + jn);
+        }
+        else if (a == "--force-drive") forceDrive = std::stof(next("--force-drive"));
         else throw std::runtime_error("unknown option: " + a);
     }
 
@@ -244,9 +251,49 @@ int run(int argc, char** argv) {
     LIFNetwork net(conn, params);
     FlyBody body;
     FlyPhysics phys;
-    if (jumpScale > 0.0f) phys.params.jumpTorqueScale = jumpScale;
     if (muscleTorque > 0.0f) phys.params.maxMuscleTorque = muscleTorque;
+    phys.params.forceJoint = forceJoint;
+    phys.params.forceDrive = forceDrive;
     if (usePhysics) phys.build(body);
+
+    if (dumpPose) {
+        // A leg is only plausible if its foot ends up below the body and out
+        // to its own side, and the two sides must be exact mirrors. Checking
+        // that numerically beats squinting at a render and guessing which
+        // joint is wrong.
+        std::printf("body at z = %.3f mm\n\n", body.root.position.z);
+        std::printf("%-10s %8s %8s %8s   %s\n",
+                    "leg", "foot x", "foot y", "foot z", "check");
+        bool allOk = true;
+        for (int l = 0; l < kLegCount; ++l) {
+            const auto id = static_cast<LegId>(l);
+            const V3 f = body.footPosition(id);
+            const float side = (l % 2 == 0) ? 1.0f : -1.0f;  // even index = left
+            const bool below = f.z < body.root.position.z - 0.15f;
+            const bool outward = f.y * side > 0.02f;
+            allOk = allOk && below && outward;
+            std::printf("%-10s %8.3f %8.3f %8.3f   %s%s\n", legName(id),
+                        f.x, f.y, f.z,
+                        below ? "" : "ABOVE BODY ",
+                        outward ? (below ? "ok" : "") : "CROSSES MIDLINE");
+        }
+        // The mirror check is the one that catches a wrong rotation axis,
+        // which "foot is below the body" happily passes.
+        for (int l = 0; l < kLegCount; l += 2) {
+            const V3 a = body.footPosition(static_cast<LegId>(l));
+            const V3 b = body.footPosition(static_cast<LegId>(l + 1));
+            const float err = std::fabs(a.x - b.x) + std::fabs(a.y + b.y) +
+                              std::fabs(a.z - b.z);
+            if (err > 1e-4f) {
+                allOk = false;
+                std::printf("  %s/%s are not mirrored (error %.4f mm)\n",
+                            legName(static_cast<LegId>(l)),
+                            legName(static_cast<LegId>(l + 1)), err);
+            }
+        }
+        std::printf("\nrest pose %s\n", allOk ? "OK" : "FAILED");
+        return allOk ? 0 : 2;
+    }
 
     if (dropMs > 0.0f) {
         // Headless end-to-end run: nervous system, muscles and body together.
@@ -271,7 +318,7 @@ int run(int argc, char** argv) {
                     if (stimLeft <= 0.0f) net.clearStimulus();
                 }
             }
-            pools.apply(1.0f, body);
+            pools.update(1.0f);
             phys.step(physDt, pools);
 
             if (i % std::max(1, n / 12) == 0 || i == n - 1) {
@@ -279,7 +326,7 @@ int run(int argc, char** argv) {
                 float ctr = 0.0f;
                 for (int l = 0; l < kLegCount; ++l) {
                     ctr = std::max(ctr,
-                        pools.pools()[l][static_cast<int>(Joint::CTr)][1].activation);
+                        pools.peakActivation(l, static_cast<int>(Joint::CTr)));
                 }
                 std::printf("%8.0f %10.4f %10.4f %9zu %9.3f\n",
                             i * physDt * 1000.0f, phys.bodyHeight(),
@@ -395,7 +442,8 @@ int run(int argc, char** argv) {
             }
         }
         const float frameMs = static_cast<float>(stepsPerFrame) * params.dtMs;
-        pools.apply(frameMs, body);
+        pools.update(frameMs);
+        if (!usePhysics) pools.applyToSkeleton(body);
         if (usePhysics) {
             phys.step(frameMs / 1000.0f, pools);
             phys.readPose(segments);
@@ -456,8 +504,7 @@ int run(int argc, char** argv) {
 
             const int l = static_cast<int>(seg.leg);
             const int j = static_cast<int>(seg.joint);
-            const auto& pool = pools.pools()[l][j];
-            const float glow = std::max(pool[0].activation, pool[1].activation);
+            const float glow = pools.peakActivation(l, j);
 
             drawPart({seg.a, aimDownZ(delta), 1.0f},
                      {seg.radius, seg.radius, len},
@@ -486,13 +533,11 @@ int run(int argc, char** argv) {
             const char* bestJoint = "-";
             for (int l = 0; l < kLegCount; ++l) {
                 for (int j = 0; j < kJointCount; ++j) {
-                    for (int d = 0; d < 2; ++d) {
-                        const float a = pools.pools()[l][j][d].activation;
-                        if (a > best) {
-                            best = a;
-                            bestLeg = legName(static_cast<LegId>(l));
-                            bestJoint = jointName(static_cast<Joint>(j));
-                        }
+                    const float a = pools.peakActivation(l, j);
+                    if (a > best) {
+                        best = a;
+                        bestLeg = legName(static_cast<LegId>(l));
+                        bestJoint = jointName(static_cast<Joint>(j));
                     }
                 }
             }
@@ -514,20 +559,14 @@ int run(int argc, char** argv) {
     // claim the whole bridge rests on: that driving a named motor pool moves
     // the joint that pool is named after, on the leg it belongs to.
     if (frameLimit > 0) {
-        std::printf("\n%-10s %-6s %8s %8s %10s\n",
-                    "leg", "joint", "flex", "extend", "angle-rest");
-        for (int l = 0; l < kLegCount; ++l) {
-            for (int j = 0; j < kJointCount; ++j) {
-                const float f = pools.pools()[l][j][0].activation;
-                const float e = pools.pools()[l][j][1].activation;
-                if (f < 0.01f && e < 0.01f) continue;
-                const auto leg = static_cast<LegId>(l);
-                const auto jt = static_cast<Joint>(j);
-                const float delta = body.angle(leg, jt) -
-                                    body.legs()[l].joints[j].restAngle;
-                std::printf("%-10s %-6s %8.3f %8.3f %10.3f\n",
-                            legName(leg), jointName(jt), f, e, delta);
-            }
+        std::printf("\n%-10s %-6s %-22s %8s %8s\n",
+                    "leg", "joint", "muscle", "activ", "torque");
+        for (const auto& m : pools.muscles()) {
+            if (m.activation < 0.01f) continue;
+            std::printf("%-10s %-6s %-22s %8.3f %8.2f\n",
+                        legName(static_cast<LegId>(m.leg)),
+                        jointName(static_cast<Joint>(m.joint)), m.name.c_str(),
+                        m.activation, m.activation * m.strength);
         }
     }
 

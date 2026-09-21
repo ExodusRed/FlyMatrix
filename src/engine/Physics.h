@@ -59,22 +59,46 @@ struct HingeJoint {
     V3 anchorA, anchorB;   // in each body's local frame
     V3 axisA, axisB;       // in each body's local frame
 
-    // Muscle torque about the hinge axis, set each step from activation.
-    float motorTorque = 0.0f;
-    // Passive stiffness and damping, standing in for the joint's own elasticity
-    // and for the muscles that are not currently being driven.
-    float restAngle = 0.0f;
-    float stiffness = 0.0f;
+    // The joint is driven as a position servo solved at the velocity level,
+    // not as an explicit spring torque.
+    //
+    // An explicit spring cannot be made stiff enough to hold a body up before
+    // it goes unstable: raising the stiffness seventeen-fold made the fly's
+    // proximal joints sag *further* (0.35 rad to 0.87 rad) and set the feet
+    // sliding, because the spring had passed the timestep's stability limit
+    // and was injecting energy instead of resisting. Solving it as a
+    // constraint is unconditionally stable, and the joint's strength becomes
+    // an impulse bound rather than a gain that can explode.
+    float targetAngle = 0.0f;
+    // Fraction of the remaining angle error the servo tries to erase each
+    // substep, like a Baumgarte coefficient. Dimensionless on purpose: an
+    // absolute rate in 1/s does not scale with the timestep, so it corrects a
+    // fixed amount per second while gravity disturbs the joint every substep,
+    // and the error grows no matter how much torque the joint is allowed.
+    float servoRate = 0.25f;
+    // Largest torque this joint can exert to reach its target. Posture holding
+    // and muscle contraction both draw on this.
+    float maxTorque = 0.0f;
     float damping = 0.0f;
     float minAngle = -3.2f, maxAngle = 3.2f;
+
+    // Rigid attachment: locks all three rotational degrees of freedom rather
+    // than leaving one free. Two hinges sharing an anchor were standing in for
+    // this, which does not actually lock rotation -- the abdomen sagged 79 um
+    // below the thorax, the largest single contributor to the fly settling
+    // onto its belly.
+    bool weld = false;
 
     // Reference directions perpendicular to the axis, used to measure the
     // joint angle. Filled in by PhysicsWorld::prepare().
     V3 refA, refB;
+    // Relative orientation the weld holds, captured at prepare().
+    Quat weldRest;
 
     // Warm-start state, carried between frames.
     V3 linearImpulse;
     V3 accumulated;
+    float servoImpulse = 0.0f;
 };
 
 struct Contact {
@@ -129,6 +153,12 @@ public:
 
     // Current angle of a hinge, in radians, measured from its rest reference.
     float jointAngle(const HingeJoint& j) const;
+
+    // Largest distance by which any joint's two anchor points have come
+    // apart. A constraint solver is only as good as this number: if it
+    // grows under load the linkage is stretching, and every downstream
+    // measurement is describing a body that is quietly falling apart.
+    float maxAnchorError() const;
 
 private:
     void integrateVelocities(float dt);

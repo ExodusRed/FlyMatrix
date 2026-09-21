@@ -33,15 +33,15 @@ struct LegLayout {
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
 constexpr LegLayout kLayout[kLegCount] = {
-    {LegId::FrontL,   0.34f, +1.0f, 0.88f, {0.411f, 0.665f, 0.449f, -2.043f, 0.293f}},
-    {LegId::FrontR,   0.34f, -1.0f, 0.88f, {0.411f, 0.665f, 0.449f, -2.043f, 0.293f}},
-    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, {1.050f, 0.245f, 0.900f, -2.364f, 0.360f}},
-    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, {1.050f, 0.245f, 0.900f, -2.364f, 0.360f}},
+    {LegId::FrontL,   0.34f, +1.0f, 0.88f, {0.657f, 0.541f, 0.066f, -2.284f, 0.272f}},
+    {LegId::FrontR,   0.34f, -1.0f, 0.88f, {0.657f, 0.541f, 0.066f, -2.284f, 0.272f}},
+    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, {0.909f, -1.477f, -0.011f, 1.624f, 1.397f}},
+    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, {0.909f, -1.477f, -0.011f, 1.624f, 1.397f}},
     // The hind knee bends the opposite way to the others, so its tibia swings
     // forward rather than back. Forcing all six to fold alike leaves the hind
     // leg unable to reach behind the body at all.
-    {LegId::HindL,   -0.30f, +1.0f, 1.12f, {-0.178f, 0.132f, -0.692f, 1.772f, 0.620f}},
-    {LegId::HindR,   -0.30f, -1.0f, 1.12f, {-0.178f, 0.132f, -0.692f, 1.772f, 0.620f}},
+    {LegId::HindL,   -0.30f, +1.0f, 1.12f, {0.893f, -0.724f, 0.008f, 2.073f, 0.481f}},
+    {LegId::HindR,   -0.30f, -1.0f, 1.12f, {0.893f, -0.724f, 0.008f, 2.073f, 0.481f}},
 };
 
 // Segment lengths for a middle leg, in millimetres, scaled per leg above.
@@ -91,19 +91,22 @@ FlyBody::FlyBody() {
         // each joint's axis is chosen for what it does to a downward-hanging
         // leg, and the chain rotates the frame as it goes.
         //
-        // ThC swings fore and aft. From vertical that is a rotation about the
-        // lateral axis; positive angles swing the leg backward, so a front leg
-        // reaching forward has a negative rest angle.
-        leg.joints[0] = {kLeft, L.rest[0], -1.05f, 1.05f, kCoxaLen * s, 0.045f};
-        // CTr lifts and lowers. From vertical that swings the leg out sideways,
-        // about the fore-aft axis. Mirroring the axis per side means the same
-        // positive angle splays both legs away from the body.
-        leg.joints[1] = {kForward * L.side, L.rest[1], -0.4f, 1.6f, kTrochLen * s, 0.040f};
+        // ThC abducts: it swings the whole leg out from the body, about the
+        // fore-aft axis. Mirroring the axis per side means the same positive
+        // angle splays both legs away from the midline.
+        leg.joints[0] = {kForward * L.side, L.rest[0], -0.4f, 1.6f,
+                         kCoxaLen * s, 0.045f};
+        // CTr depresses: it swings the femur down within the leg's own plane,
+        // about the local lateral axis. This is the joint the tergotrochanteral
+        // jump muscle acts on, and it is the joint that levers the body off the
+        // ground -- an abduction axis here cannot generate lift at all, in
+        // either direction, which is what the earlier version did.
+        leg.joints[1] = {kLeft, L.rest[1], -1.6f, 1.6f, kTrochLen * s, 0.040f};
         // TrF twists the femur about its own long axis, which by now is the
         // frame's local Z.
         leg.joints[2] = {kUp * L.side, L.rest[2], -0.9f, 0.9f, kFemurLen * s, 0.036f};
-        // FTi is the knee, the joint with the largest range. It bends in the
-        // plane of the leg, hinging about the frame's local lateral axis.
+        // FTi is the knee, the joint with the largest range, hinging about the
+        // same local lateral axis.
         leg.joints[3] = {kLeft, L.rest[3], -2.6f, 2.6f, kTibiaLen * s, 0.028f};
         // TiTa is the ankle, bending the same way but less.
         leg.joints[4] = {kLeft, L.rest[4], -1.2f, 1.5f, kTarsusLen * s, 0.020f};

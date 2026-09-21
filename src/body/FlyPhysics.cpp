@@ -41,18 +41,15 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     head.setBoxInertia(params.headMass, {0.22f, 0.21f, 0.21f});
     head_ = world.addBody(head);
 
-    // Abdomen and head are welded on: two hinges with opposing axes at the
-    // same anchor come close enough to rigid for this purpose, and it avoids a
-    // separate fixed-constraint type.
-    for (int k = 0; k < 2; ++k) {
+    // Abdomen and head are welded to the thorax.
+    {
         HingeJoint j;
         j.a = thorax_;
         j.b = abdomen_;
         j.anchorA = {-0.40f, 0, -0.02f};
         j.anchorB = {0.38f, 0, 0.02f};
-        j.axisA = j.axisB = (k == 0) ? V3{0, 1, 0} : V3{0, 0, 1};
-        j.stiffness = params.jointStiffness * 3.0f;
-        j.damping = params.jointDamping * 3.0f;
+        j.axisA = j.axisB = {0, 1, 0};
+        j.weld = true;
         world.joints.push_back(j);
 
         HingeJoint h;
@@ -60,9 +57,8 @@ void FlyPhysics::build(const FlyBody& skeleton) {
         h.b = head_;
         h.anchorA = {0.42f, 0, 0.04f};
         h.anchorB = {-0.10f, 0, -0.01f};
-        h.axisA = h.axisB = (k == 0) ? V3{0, 1, 0} : V3{0, 0, 1};
-        h.stiffness = params.jointStiffness * 3.0f;
-        h.damping = params.jointDamping * 3.0f;
+        h.axisA = h.axisB = {0, 1, 0};
+        h.weld = true;
         world.joints.push_back(h);
     }
 
@@ -98,14 +94,21 @@ void FlyPhysics::build(const FlyBody& skeleton) {
             hj.anchorB = {0, 0, 0};
             // The hinge axis is the skeleton's joint axis, expressed in each
             // body's own frame.
-            const V3 worldAxis = (j == 0)
-                ? skeleton.root.rotation.rotate(leg.joints[j].axis)
-                : rot.rotate(leg.joints[j].axis);
+            //
+            // FlyBody::worldPose applies a joint's axis in the frame *before*
+            // that joint rotates -- that is, in the parent segment's frame --
+            // so the axis has to be taken into the world through the parent's
+            // orientation, not the child's. Using the child's rotated every
+            // hinge below ThC onto the wrong axis, which left the legs able to
+            // splay but never to extend, and so unable to lift the body at all.
+            const V3 worldAxis =
+                world.bodies[parent].orientation.rotate(leg.joints[j].axis);
             const M3 ra = M3::fromQuat(world.bodies[parent].orientation);
             const M3 rb = M3::fromQuat(rot);
             hj.axisA = ra.transposed() * worldAxis;
             hj.axisB = rb.transposed() * worldAxis;
-            hj.stiffness = params.jointStiffness;
+            hj.maxTorque = params.postureTorque;
+            hj.servoRate = params.servoRate;
             hj.damping = params.jointDamping;
             hj.minAngle = leg.joints[j].minAngle - leg.angle[j];
             hj.maxAngle = leg.joints[j].maxAngle - leg.angle[j];
@@ -142,6 +145,18 @@ void FlyPhysics::reset(const FlyBody& skeleton) {
     build(skeleton);
 }
 
+void FlyPhysics::step(float dtSeconds) {
+    if (dtSeconds <= 0.0f) return;
+    for (int l = 0; l < kLegCount; ++l) {
+        for (int j = 0; j < kJointCount; ++j) {
+            HingeJoint& hj = world.joints[jointIndex_[l][j]];
+            const float d = (params.forceJoint == j) ? params.forceDrive : 0.0f;
+            applyDrive(hj, restAngle_[l][j], d);
+        }
+    }
+    advance(dtSeconds);
+}
+
 void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
     if (dtSeconds <= 0.0f) return;
 
@@ -150,18 +165,32 @@ void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
     // directly now sets a force, and the body decides what happens.
     for (int l = 0; l < kLegCount; ++l) {
         for (int j = 0; j < kJointCount; ++j) {
-            const auto& pool = pools.pools()[l][j];
-            const float drive = pool[1].activation - pool[0].activation;
-            float scale = params.maxMuscleTorque;
-            // The tergotrochanteral jump muscle acts on the coxa-trochanter
-            // joint and is far stronger than a postural muscle.
-            if (static_cast<Joint>(j) == Joint::CTr) scale *= params.jumpTorqueScale;
+            // drive() already sums each muscle weighted by its own strength,
+            // so there is no per-joint fudge factor here any more: a jump
+            // muscle is strong because the muscle is strong.
             HingeJoint& hj = world.joints[jointIndex_[l][j]];
-            hj.motorTorque = drive * scale;
-            hj.restAngle = restAngle_[l][j];
+            const float d = (params.forceJoint == j) ? params.forceDrive
+                                                    : pools.drive(l, j);
+            applyDrive(hj, restAngle_[l][j], d);
         }
     }
 
+    advance(dtSeconds);
+}
+
+// A muscle both shifts where the joint is trying to be and how hard it is
+// willing to push to get there. Drive is unbounded -- a strong muscle at full
+// activation returns a large number -- so the excursion saturates while the
+// torque budget keeps growing, which is what makes a jump muscle different
+// from a postural one rather than just louder.
+void FlyPhysics::applyDrive(HingeJoint& hj, float restAngle, float drive) const {
+    const float squashed = std::tanh(drive);
+    hj.targetAngle = restAngle + squashed * params.muscleExcursionRad;
+    hj.maxTorque = params.postureTorque * (1.0f + std::fabs(drive));
+    hj.servoRate = params.servoRate;
+}
+
+void FlyPhysics::advance(float dtSeconds) {
     const float h = 1.0f / params.substepHz;
     int steps = static_cast<int>(std::ceil(dtSeconds / h));
     steps = std::clamp(steps, 1, 256);
