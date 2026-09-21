@@ -194,6 +194,7 @@ int run(int argc, char** argv) {
     float muscleTorque = -1.0f;
     int forceJoint = -1;
     float forceDrive = 0.0f;
+    float corrVel = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -222,6 +223,7 @@ int run(int argc, char** argv) {
             if (forceJoint < 0) throw std::runtime_error("unknown joint: " + jn);
         }
         else if (a == "--force-drive") forceDrive = std::stof(next("--force-drive"));
+        else if (a == "--corr") corrVel = std::stof(next("--corr"));
         else throw std::runtime_error("unknown option: " + a);
     }
 
@@ -255,6 +257,7 @@ int run(int argc, char** argv) {
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
     if (usePhysics) phys.build(body);
+    if (corrVel > 0.0f) phys.world.params.maxCorrectionVelocity = corrVel;
 
     if (dumpPose) {
         // A leg is only plausible if its foot ends up below the body and out

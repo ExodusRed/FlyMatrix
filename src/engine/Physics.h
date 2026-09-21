@@ -33,6 +33,17 @@ struct RigidBody {
     V3 force;
     V3 torque;
 
+    // Split impulse: position error is corrected through a second, parallel
+    // set of velocities that move the bodies but are discarded afterwards.
+    //
+    // Folding position correction into real velocity, the usual Baumgarte
+    // approach, leaves that correction behind as momentum. At a low
+    // coefficient it is a slow leak; at the 0.7 needed here to stop a
+    // five-link leg compressing, it accumulated until the fly launched itself
+    // 26 mm into the air and stayed there.
+    V3 pseudoVelocity;
+    V3 pseudoAngular;
+
     // Inverse inertia rotated into world space, which is what the solver needs.
     M3 invInertiaWorld() const {
         const M3 r = M3::fromQuat(orientation);
@@ -46,6 +57,15 @@ struct RigidBody {
 
     V3 pointVelocity(const V3& relativePoint) const {
         return velocity + cross(angularVelocity, relativePoint);
+    }
+
+    void applyPseudoImpulse(const V3& impulse, const V3& relativePoint) {
+        pseudoVelocity += impulse * invMass;
+        pseudoAngular += invInertiaWorld() * cross(relativePoint, impulse);
+    }
+
+    V3 pseudoPointVelocity(const V3& relativePoint) const {
+        return pseudoVelocity + cross(pseudoAngular, relativePoint);
     }
 
     void setBoxInertia(float mass, const V3& halfExtents);
@@ -79,6 +99,14 @@ struct HingeJoint {
     // Largest torque this joint can exert to reach its target. Posture holding
     // and muscle contraction both draw on this.
     float maxTorque = 0.0f;
+    // Feed-forward torque from muscle contraction, applied once per step
+    // on top of the posture servo. Kept separate on purpose: folding the
+    // muscle into the servo's target angle made a muscle's strength
+    // almost irrelevant to the movement it produced, because the target
+    // shift saturated. A weak muscle and a jump muscle then differed only
+    // in how hard they held a target they both reached, and whole-body
+    // activation from anywhere in the brain out-jumped the escape circuit.
+    float muscleTorque = 0.0f;
     float damping = 0.0f;
     float minAngle = -3.2f, maxAngle = 3.2f;
 
@@ -99,6 +127,7 @@ struct HingeJoint {
     V3 linearImpulse;
     V3 accumulated;
     float servoImpulse = 0.0f;
+    float muscleImpulse = 0.0f;
 };
 
 struct Contact {
@@ -144,6 +173,17 @@ public:
         // 400 rad/s moves its tip at ~200 mm/s).
         float maxAngularVelocity = 400.0f;   // rad/s
         float maxLinearVelocity = 3000.0f;   // mm/s
+
+        // Ceiling on the split-impulse correction velocity.
+        //
+        // Position correction moves a body without that motion ever being
+        // momentum, which is the whole point -- but it also means gravity
+        // cannot oppose it. Left uncapped, a joint error that is recreated
+        // every substep becomes a steady upward teleport: the fly climbed
+        // past 300 mm at a constant 940 mm/s with no ground contact at all,
+        // never decelerating, because it was not actually moving under its
+        // own velocity.
+        float maxCorrectionVelocity = 40.0f;  // mm/s
     };
 
     Params params;

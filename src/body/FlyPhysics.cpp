@@ -187,10 +187,21 @@ void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
 // torque budget keeps growing, which is what makes a jump muscle different
 // from a postural one rather than just louder.
 void FlyPhysics::applyDrive(HingeJoint& hj, float restAngle, float drive) const {
-    const float squashed = std::tanh(drive);
-    hj.targetAngle = restAngle + squashed * params.muscleExcursionRad;
-    hj.maxTorque = params.postureTorque * (1.0f + std::fabs(drive));
+    // Posture and contraction are separate. The servo always holds the rest
+    // angle with a fixed torque budget; the muscle adds a feed-forward torque
+    // proportional to activation times its own strength, so a jump muscle
+    // produces twenty times the force of a postural one rather than merely
+    // holding the same target more firmly.
+    hj.targetAngle = restAngle;
+    // Antagonist relaxation: a joint being actively driven gives up its
+    // postural hold in proportion to the drive. Without it, posture is a rigid
+    // servo the muscle has to overpower, which makes the response a threshold
+    // rather than a gradient -- below it nothing moves at all, and just above
+    // it the fly launches sixteen millimetres. A real animal releases the
+    // opposing muscles instead of fighting them.
+    hj.maxTorque = params.postureTorque / (1.0f + std::fabs(drive));
     hj.servoRate = params.servoRate;
+    hj.muscleTorque = drive * params.maxMuscleTorque;
 }
 
 void FlyPhysics::advance(float dtSeconds) {

@@ -132,7 +132,20 @@ void PhysicsWorld::integrateVelocities(float dt) {
 void PhysicsWorld::solveJoints(float dt) {
     const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
 
-    for (auto& j : joints) j.servoImpulse = 0.0f;
+    for (auto& j : joints) {
+        j.servoImpulse = 0.0f;
+        j.muscleImpulse = 0.0f;
+    }
+
+    // Muscle contraction is applied inside the iteration loop below, as a
+    // bounded impulse, not as a raw torque here.
+    //
+    // A feed-forward torque large enough to make the fly jump was also large
+    // enough to pull the joint anchors apart faster than the solver could put
+    // them back. The position correction then did work on the body every
+    // substep, and the fly climbed steadily with no ground contact at all. A
+    // real muscle cannot dislocate the joint it pulls on; making the muscle
+    // one more constraint the solver has to satisfy enforces that.
 
     // Warm start: replay the impulse that held this joint together last step.
     // Without it a standing pose is re-solved from nothing every frame and the
@@ -185,6 +198,29 @@ void PhysicsWorld::solveJoints(float dt) {
                     const float old = j.servoImpulse;
                     j.servoImpulse = std::clamp(old + lambda, -maxImp, maxImp);
                     lambda = j.servoImpulse - old;
+
+                    const V3 imp = axis * lambda;
+                    A.angularVelocity += ia * (-imp);
+                    B.angularVelocity += ib * imp;
+                }
+            }
+
+            // --- muscle: bounded contraction impulse about the hinge axis ---
+            if (j.muscleTorque != 0.0f) {
+                const V3 axis = normalise(A.orientation.rotate(j.axisA));
+                const M3 ia = A.invInertiaWorld();
+                const M3 ib = B.invInertiaWorld();
+                const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                if (eff > 1e-12f) {
+                    // The muscle delivers torque * dt of angular impulse per
+                    // step, no more. Tracking what it has already delivered
+                    // means the remainder is spent on the first iteration and
+                    // the rest of the sweep is free to correct the damage in
+                    // velocity space, where it costs no energy, instead of
+                    // leaving it as position error for the correction pass.
+                    const float target = j.muscleTorque * dt;
+                    const float lambda = target - j.muscleImpulse;
+                    j.muscleImpulse = target;
 
                     const V3 imp = axis * lambda;
                     A.angularVelocity += ia * (-imp);
@@ -311,13 +347,23 @@ void PhysicsWorld::solveJoints(float dt) {
                 M3 kInv;
                 if (!k.invert(kInv)) continue;
 
+                // Velocity constraint, with no positional bias: this impulse
+                // is pure momentum exchange and adds no energy.
                 const V3 relVel = B.pointVelocity(rB) - A.pointVelocity(rA);
-                const V3 bias = err * (params.baumgarte * invDt);
-                const V3 impulse = kInv * (-(relVel + bias));
-
+                const V3 impulse = kInv * (-relVel);
                 A.applyImpulse(-impulse, rA);
                 B.applyImpulse(impulse, rB);
                 j.accumulated += impulse;
+
+                // Position correction, into the pseudo-velocities. These move
+                // the bodies during integration and are then thrown away, so
+                // the correction never becomes momentum.
+                const V3 pseudoRel =
+                    B.pseudoPointVelocity(rB) - A.pseudoPointVelocity(rA);
+                const V3 bias = err * (params.baumgarte * invDt);
+                const V3 pseudo = kInv * (-(pseudoRel + bias));
+                A.applyPseudoImpulse(-pseudo, rA);
+                B.applyPseudoImpulse(pseudo, rB);
             }
         }
     }
@@ -362,9 +408,7 @@ void PhysicsWorld::solveContacts(float dt) {
             const float effN = b.invMass + dot(rn, ii * rn);
             if (effN < 1e-12f) continue;
 
-            const float push = std::max(0.0f, c.penetration - params.slop);
-            const float bias = params.baumgarte * invDt * push;
-            float lambda = -(dot(v, c.normal) - bias) / effN;
+            float lambda = -dot(v, c.normal) / effN;
 
             // Accumulated impulse is clamped, not the increment: a contact may
             // pull less than before but the total can never become adhesive.
@@ -372,6 +416,17 @@ void PhysicsWorld::solveContacts(float dt) {
             c.normalImpulse = std::max(0.0f, old + lambda);
             lambda = c.normalImpulse - old;
             b.applyImpulse(c.normal * lambda, r);
+
+            // Push the body back out of the ground through the pseudo
+            // velocities, so resting on the floor does not slowly trickle
+            // energy into the fly.
+            const float push = std::max(0.0f, c.penetration - params.slop);
+            if (push > 0.0f) {
+                const float pv = dot(b.pseudoPointVelocity(r), c.normal);
+                const float bias = params.baumgarte * invDt * push;
+                const float pl = std::max(0.0f, (bias - pv) / effN);
+                b.applyPseudoImpulse(c.normal * pl, r);
+            }
 
             // Friction, in two tangent directions, clamped by Coulomb.
             const V3 t1 = perpendicular(c.normal);
@@ -401,11 +456,23 @@ void PhysicsWorld::solveContacts(float dt) {
 void PhysicsWorld::integratePositions(float dt) {
     for (auto& b : bodies) {
         if (b.invMass <= 0.0f) continue;
-        b.position += b.velocity * dt;
+        // Real velocity plus the position-correction velocity. The latter is
+        // cleared below, so it moves the body without ever being momentum.
+        // Cap the correction before it is used, so a persistent constraint
+        // error cannot drive the body indefinitely.
+        const float pv = length(b.pseudoVelocity);
+        if (pv > params.maxCorrectionVelocity) {
+            b.pseudoVelocity = b.pseudoVelocity * (params.maxCorrectionVelocity / pv);
+        }
+        const float pa = length(b.pseudoAngular);
+        if (pa > params.maxAngularVelocity) {
+            b.pseudoAngular = b.pseudoAngular * (params.maxAngularVelocity / pa);
+        }
+        b.position += (b.velocity + b.pseudoVelocity) * dt;
+        const V3 spin = b.angularVelocity + b.pseudoAngular;
         // Quaternion derivative: q' = 0.5 * omega * q, integrated explicitly
         // and renormalised, which is accurate enough at these timesteps.
-        const Quat w{0.0f, b.angularVelocity.x, b.angularVelocity.y,
-                     b.angularVelocity.z};
+        const Quat w{0.0f, spin.x, spin.y, spin.z};
         const Quat dq = w * b.orientation;
         b.orientation = Quat{b.orientation.w + 0.5f * dq.w * dt,
                              b.orientation.x + 0.5f * dq.x * dt,
@@ -414,6 +481,8 @@ void PhysicsWorld::integratePositions(float dt) {
                             .normalised();
         b.force = {};
         b.torque = {};
+        b.pseudoVelocity = {};
+        b.pseudoAngular = {};
     }
 }
 

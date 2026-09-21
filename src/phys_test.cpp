@@ -61,12 +61,17 @@ float g_abdMass = -1.0f;
 float g_abdX = 0.0f;
 int g_iters = -1;
 float g_baum = -1.0f;
+float g_corr = -1.0f;
+float g_substep = -1.0f;
+float g_ms = 300.0f;
+bool g_standOnly = false;
 
 Result run(float ms, int forceJoint, float forceDrive) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
+    if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
@@ -76,6 +81,7 @@ Result run(float ms, int forceJoint, float forceDrive) {
     // have to be applied afterwards.
     if (g_iters > 0) phys.world.params.iterations = g_iters;
     if (g_baum > 0.0f) phys.world.params.baumgarte = g_baum;
+    if (g_corr > 0.0f) phys.world.params.maxCorrectionVelocity = g_corr;
 
     const int n = static_cast<int>(ms / 1000.0f / kDt);
     Result r{};
@@ -172,6 +178,7 @@ int traceOne(const std::string& jointName_, float drive) {
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
+    if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = joint;
@@ -221,6 +228,18 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--baumgarte") == 0) {
             g_baum = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--ms") == 0) {
+            g_ms = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--corr") == 0) {
+            g_corr = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--substep") == 0) {
+            g_substep = std::stof(argv[i + 1]);
+        }
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--stand-only") == 0) g_standOnly = true;
     }
     if (argc >= 3 && std::strcmp(argv[1], "--trace") == 0) {
         const float drive = (argc >= 4) ? std::stof(argv[3]) : 15.0f;
@@ -228,7 +247,7 @@ int main(int argc, char** argv) {
     }
 
     std::printf("=== 1. does the body stand on its own? ===\n");
-    const Result base = run(300.0f, -1, 0.0f);
+    const Result base = run(g_ms, -1, 0.0f);
     std::printf("no drive: height %.4f mm, %zu contacts%s\n",
                 base.height, base.contacts, base.diverged ? "  DIVERGED" : "");
     // What "working" means, as a test rather than an impression: the fly
@@ -290,7 +309,7 @@ int main(int argc, char** argv) {
     bool anyLifts = false;
     for (int j = 0; j < kJointCount; ++j) {
         for (const float d : {-15.0f, 15.0f}) {
-            const Result r = run(300.0f, j, d);
+            const Result r = run(g_ms, j, d);
             const float moved = r.angle[j] - base.angle[j];
             const float lifted = r.height - base.height;
             const char* verdict;
