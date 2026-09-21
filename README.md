@@ -353,7 +353,7 @@ friction. Muscle activation becomes joint torque, so the body decides what
 happens.
 
     stands   0.578 mm on six feet, level to within 1 degree, no drift to 1 s
-    jumps    3.12 mm peak when the giant fibre fires
+    jumps    3.75 mm peak when the giant fibre fires
 
 A real *Drosophila* takes off at around 0.3 m/s, about 4.6 mm ballistic, so
 the jump is the right order of magnitude.
@@ -429,10 +429,10 @@ cell type like DNp01 amounts to -- the answer is yes:
 
 | stimulus | neurons | peak |
 |----------|--------:|-----:|
-| MBON01, MBON04, APL, KC | 2 each | 0.62 mm, no jump |
-| DNp04 (descending) | 2 | 1.04 mm |
-| **DNp01, the giant fibre** | **1** | **3.12 mm** |
-| DNp03 (descending) | 2 | 5.14 mm |
+| MBON01, APL, KC | 2 each | 0.62 mm, no jump |
+| DNp04 (descending) | 2 | 0.93 mm |
+| **DNp01, the giant fibre** | **1** | **3.75 mm** |
+| DNp03 (descending) | 2 | 3.19 mm |
 | DNp09 (descending) | 2 | 24.8 mm |
 
 Descending neurons, which are the cells that carry motor commands from brain

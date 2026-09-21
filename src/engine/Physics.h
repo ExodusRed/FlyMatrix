@@ -183,7 +183,10 @@ public:
         // past 300 mm at a constant 940 mm/s with no ground contact at all,
         // never decelerating, because it was not actually moving under its
         // own velocity.
-        float maxCorrectionVelocity = 40.0f;  // mm/s
+        // Swept against both failure modes it sits between: too low and a
+        // body that has sunk into the floor cannot climb back out, too
+        // high and persistent joint error drives the fly upward.
+        float maxCorrectionVelocity = 150.0f;  // mm/s
     };
 
     Params params;
