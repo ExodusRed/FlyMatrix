@@ -43,6 +43,13 @@ struct Result {
     // says it should be. If the joints hold and the foot is planted but
     // this has shrunk, the linkage itself is compressing.
     float reach, reachRest;
+    // Per-leg: how much shorter the attachment-to-foot span has become
+    // than the rest pose says it should be. If the joints hold but this
+    // is non-zero, the linkage itself is being compressed, and if the
+    // hind legs compress more than the front ones the body pitches.
+    float legShort[kLegCount];
+    int feetDown;
+    bool thoraxDown, abdomenDown, headDown;
     bool diverged;
 };
 
@@ -50,15 +57,25 @@ struct Result {
 // ended up and what every joint of the front-left leg did.
 float g_stiffness = -1.0f;
 float g_servo = -1.0f;
+float g_abdMass = -1.0f;
+float g_abdX = 0.0f;
+int g_iters = -1;
+float g_baum = -1.0f;
 
 Result run(float ms, int forceJoint, float forceDrive) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
+    if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
+    if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
     phys.build(skeleton);
+    // Solver knobs live on the world, which build() recreates, so they
+    // have to be applied afterwards.
+    if (g_iters > 0) phys.world.params.iterations = g_iters;
+    if (g_baum > 0.0f) phys.world.params.baumgarte = g_baum;
 
     const int n = static_cast<int>(ms / 1000.0f / kDt);
     Result r{};
@@ -74,6 +91,14 @@ Result run(float ms, int forceJoint, float forceDrive) {
     r.peak = phys.peakHeight();
     r.contacts = phys.world.contacts.size();
     r.anchorError = phys.world.maxAnchorError();
+    r.feetDown = 0;
+    r.thoraxDown = r.abdomenDown = r.headDown = false;
+    for (const auto& c : phys.world.contacts) {
+        if (c.probe < static_cast<std::uint32_t>(kLegCount)) ++r.feetDown;
+        else if (c.probe == phys.thoraxProbe()) r.thoraxDown = true;
+        else if (c.probe == phys.abdomenProbe()) r.abdomenDown = true;
+        else if (c.probe == phys.headProbe()) r.headDown = true;
+    }
     {
         // How far the front-left foot has slid from where it started.
         std::vector<FlyBody::SegmentPose> pose;
@@ -105,7 +130,8 @@ Result run(float ms, int forceJoint, float forceDrive) {
         // behind the thorax, so a few degrees of body pitch shifts it
         // vertically even when the weld is perfectly rigid -- measuring raw
         // z-difference reports that as weld failure.
-        const V3 expected = th.position + th.orientation.rotate({-0.78f, 0, -0.04f});
+        const float abdX = (g_abdX != 0.0f) ? g_abdX : -0.78f;
+        const V3 expected = th.position + th.orientation.rotate({abdX, 0, -0.04f});
         r.trunkDrop = length(ab.position - expected);
         // Pitch: how far the thorax's forward axis has tilted out of level.
         const V3 fwd = th.orientation.rotate({1, 0, 0});
@@ -118,6 +144,16 @@ Result run(float ms, int forceJoint, float forceDrive) {
         r.reach = length(foot - phys.world.bodies[0].position);
         r.reachRest = length(skeleton.footPosition(LegId::FrontL) -
                              skeleton.root.position);
+
+        std::vector<FlyBody::SegmentPose> restPose;
+        skeleton.worldPose(restPose);
+        for (int l = 0; l < kLegCount; ++l) {
+            const std::size_t base = static_cast<std::size_t>(l) * kJointCount;
+            const float now = length(pose[base + kJointCount - 1].b - pose[base].a);
+            const float was =
+                length(restPose[base + kJointCount - 1].b - restPose[base].a);
+            r.legShort[l] = now - was;
+        }
     }
     return r;
 }
@@ -136,6 +172,8 @@ int traceOne(const std::string& jointName_, float drive) {
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
+    if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
+    if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = joint;
     phys.params.forceDrive = drive;
     phys.build(skeleton);
@@ -171,6 +209,18 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--servo") == 0) {
             g_servo = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--abdomen-mass") == 0) {
+            g_abdMass = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--abdomen-x") == 0) {
+            g_abdX = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--iters") == 0) {
+            g_iters = std::atoi(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--baumgarte") == 0) {
+            g_baum = std::stof(argv[i + 1]);
+        }
     }
     if (argc >= 3 && std::strcmp(argv[1], "--trace") == 0) {
         const float drive = (argc >= 4) ? std::stof(argv[3]) : 15.0f;
@@ -181,7 +231,21 @@ int main(int argc, char** argv) {
     const Result base = run(300.0f, -1, 0.0f);
     std::printf("no drive: height %.4f mm, %zu contacts%s\n",
                 base.height, base.contacts, base.diverged ? "  DIVERGED" : "");
-    const bool stands = !base.diverged && base.height > 0.15f && base.height < 2.0f;
+    // What "working" means, as a test rather than an impression: the fly
+    // carries its own weight on six feet, none of the trunk touches the floor,
+    // it sits near the height its rest pose was solved for, and it is roughly
+    // level.
+    const bool onSixFeet = base.feetDown == kLegCount;
+    const bool trunkClear = !base.thoraxDown && !base.abdomenDown && !base.headDown;
+    const bool rideHeight = base.height > 0.52f;
+    const bool level = std::fabs(base.pitchDeg) < 2.0f;
+    const bool stands = !base.diverged && onSixFeet && trunkClear &&
+                        rideHeight && level;
+
+    std::printf("  contacts: %d feet%s%s%s\n", base.feetDown,
+                base.thoraxDown ? " + THORAX" : "",
+                base.abdomenDown ? " + ABDOMEN" : "",
+                base.headDown ? " + HEAD" : "");
     std::printf("  max joint anchor error %.4f mm   front foot moved %.4f mm\n",
                 base.anchorError, base.footLateral);
     if (base.anchorError > 0.02f) {
@@ -200,11 +264,23 @@ int main(int argc, char** argv) {
                 base.trunkDrop, base.pitchDeg);
     std::printf("  thorax-to-foot reach %.4f mm, rest %.4f mm, shortfall %+.4f mm\n",
                 base.reach, base.reachRest, base.reach - base.reachRest);
+    std::printf("  per-leg span change (mm): ");
+    for (int l = 0; l < kLegCount; ++l) {
+        std::printf("%s=%+.4f  ", legName(static_cast<LegId>(l)), base.legShort[l]);
+    }
+    std::printf("\n");
     std::printf("  front-left joint angles after settling:");
     for (int j = 0; j < kJointCount; ++j) {
         std::printf("  %s=%+.3f", jointName(static_cast<Joint>(j)), base.angle[j]);
     }
-    std::printf("\n  -> %s\n\n", stands ? "STANDS" : "COLLAPSED");
+    std::printf("\n  -> %s\n", stands ? "PASS" : "FAIL");
+    if (!stands) {
+        if (!onSixFeet) std::printf("     only %d feet down\n", base.feetDown);
+        if (!trunkClear) std::printf("     trunk is on the ground\n");
+        if (!rideHeight) std::printf("     riding at %.3f mm, want > 0.520\n", base.height);
+        if (!level) std::printf("     pitched %.2f deg, want within 2\n", base.pitchDeg);
+    }
+    std::printf("\n");
 
     std::printf("=== 2. does each joint respond to torque, and does it lift? ===\n");
     std::printf("baseline height %.4f, joint angles all start at 0\n\n", base.height);

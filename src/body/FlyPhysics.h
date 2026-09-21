@@ -20,6 +20,9 @@ public:
     struct Params {
         float thoraxMass = 400.0f;   // micrograms; a fly is about 1 mg
         float abdomenMass = 350.0f;
+        // How far behind the thorax centre the abdomen sits. It overhangs
+        // the hind legs, so this is a lever arm on the body's pitch.
+        float abdomenOffsetX = -0.78f;
         float headMass = 90.0f;
 
         // Anatomical leg segments would weigh a fraction of a microgram, which
@@ -90,6 +93,20 @@ public:
     // a jump is measured.
     float peakHeight() const { return peakHeight_; }
     bool airborne() const { return airborne_; }
+
+    // Which probe index is which, so a contact can be named rather than
+    // just counted. Feet come first, one per leg, then the trunk.
+    std::size_t footProbe(int leg) const { return static_cast<std::size_t>(leg); }
+    std::size_t thoraxProbe() const { return kLegCount; }
+    std::size_t abdomenProbe() const { return kLegCount + 1; }
+    std::size_t headProbe() const { return kLegCount + 2; }
+    // True when any part of the trunk is touching the ground.
+    bool trunkGrounded() const {
+        for (const auto& c : world.contacts) {
+            if (c.probe >= kLegCount) return true;
+        }
+        return false;
+    }
 
     void reset(const FlyBody& skeleton);
 

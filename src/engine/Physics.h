@@ -115,10 +115,17 @@ class PhysicsWorld {
 public:
     struct Params {
         V3 gravity{0, 0, -9810.0f};  // mm/s^2
-        int iterations = 24;
+        // A 5-link leg needs far more Gauss-Seidel passes than a typical
+        // game scene: at 24 the legs behaved as if compressible and the
+        // fly sank 0.1 mm into them.
+        int iterations = 64;
         // Fraction of position error corrected per step. Too high and the
         // solver injects energy and jitters; too low and joints visibly sag.
-        float baumgarte = 0.2f;
+        // 0.2 is the usual starting value and was far too soft here -- the
+        // accumulated anchor error down a five-joint chain cost 0.1 mm of ride
+        // height and tipped the fly onto its abdomen. 0.7 costs nothing
+        // measurable in stability at this timestep.
+        float baumgarte = 0.7f;
         // Penetration tolerated before any correction is applied, which stops
         // resting contacts from buzzing.
         float slop = 0.002f;  // mm

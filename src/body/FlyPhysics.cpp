@@ -30,7 +30,7 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     thorax_ = world.addBody(thorax);
 
     RigidBody abdomen;
-    abdomen.position = skeleton.root.apply({-0.78f, 0, -0.04f});
+    abdomen.position = skeleton.root.apply({params.abdomenOffsetX, 0, -0.04f});
     abdomen.orientation = skeleton.root.rotation;
     abdomen.setBoxInertia(params.abdomenMass, {0.52f, 0.26f, 0.26f});
     abdomen_ = world.addBody(abdomen);
@@ -47,7 +47,10 @@ void FlyPhysics::build(const FlyBody& skeleton) {
         j.a = thorax_;
         j.b = abdomen_;
         j.anchorA = {-0.40f, 0, -0.02f};
-        j.anchorB = {0.38f, 0, 0.02f};
+        // The shared anchor sits at -0.40 in the thorax's frame; expressed
+        // in the abdomen's frame that is -0.40 minus the abdomen's own
+        // offset, which for the default -0.78 gives +0.38.
+        j.anchorB = {-0.40f - params.abdomenOffsetX, 0, 0.02f};
         j.axisA = j.axisB = {0, 1, 0};
         j.weld = true;
         world.joints.push_back(j);
