@@ -66,7 +66,7 @@ float g_substep = -1.0f;
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
-Result run(float ms, int forceJoint, float forceDrive) {
+Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
@@ -76,6 +76,7 @@ Result run(float ms, int forceJoint, float forceDrive) {
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
+    phys.params.forceLeg = forceLeg;
     phys.build(skeleton);
     // Solver knobs live on the world, which build() recreates, so they
     // have to be applied afterwards.
@@ -320,6 +321,41 @@ int main(int argc, char** argv) {
             else verdict = "moves, no lift";
             std::printf("%-6s %+7.1f %+10.3f %+10.4f  %s\n",
                         jointName(static_cast<Joint>(j)), d, moved, lifted, verdict);
+        }
+    }
+
+    // --- 3. per-leg breakdown -------------------------------------------
+    //
+    // Test 2 drives one joint on all six legs at once and reports a single
+    // height. That hides disagreement: if three legs lift and three sink, the
+    // average reads "moves, no lift" and the joint looks useless when it is in
+    // fact strong and miswired. The rest pose is solved per leg by IK, and
+    // nothing in that solve required the six legs to come out in the same
+    // joint configuration, so this is a live possibility rather than a
+    // theoretical one.
+    std::printf("\n=== 3. does each leg agree about which way a joint lifts? ===\n");
+    std::printf("height change per leg, driven one leg at a time\n\n");
+    std::printf("%-6s %7s", "joint", "drive");
+    for (int l = 0; l < kLegCount; ++l) {
+        std::printf(" %9s", legName(static_cast<LegId>(l)));
+    }
+    std::printf("   verdict\n");
+
+    for (int j = 0; j < kJointCount; ++j) {
+        for (const float d : {-15.0f, 15.0f}) {
+            std::printf("%-6s %+7.1f", jointName(static_cast<Joint>(j)), d);
+            int up = 0, down = 0;
+            for (int l = 0; l < kLegCount; ++l) {
+                const Result r = run(g_ms, j, d, l);
+                const float lifted = r.height - base.height;
+                if (lifted > 0.02f) ++up;
+                else if (lifted < -0.02f) ++down;
+                std::printf(" %+9.4f", lifted);
+            }
+            std::printf("   %s\n", (up && down) ? "LEGS DISAGREE"
+                                 : up           ? "all lift"
+                                 : down         ? "all sink"
+                                                : "no effect");
         }
     }
 

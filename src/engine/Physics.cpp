@@ -109,6 +109,13 @@ float PhysicsWorld::maxAnchorError() const {
     return worst;
 }
 
+float PhysicsWorld::jointRate(const HingeJoint& j) const {
+    const RigidBody& A = bodies[j.a];
+    const RigidBody& B = bodies[j.b];
+    const V3 axis = normalise(A.orientation.rotate(j.axisA));
+    return dot(B.angularVelocity - A.angularVelocity, axis);
+}
+
 void PhysicsWorld::integrateVelocities(float dt) {
     for (auto& b : bodies) {
         if (b.invMass <= 0.0f) continue;
@@ -118,6 +125,22 @@ void PhysicsWorld::integrateVelocities(float dt) {
         b.angularVelocity =
             b.angularVelocity * (1.0f / (1.0f + params.angularDamping * dt));
 
+    }
+    clampVelocities();
+}
+
+// The speed limit has to be the last thing applied before positions are
+// integrated, not the first.
+//
+// It used to live at the end of integrateVelocities, which runs before the
+// joint and contact solvers. Those solvers then applied impulses that nothing
+// re-clamped, so the limit only ever caught velocity produced by gravity --
+// by far the smallest contributor. Constraint impulses were unbounded, and
+// measured joint rates during a jump reached 204,000 rad/s where a real fly's
+// fastest leg joint does a few hundred.
+void PhysicsWorld::clampVelocities() {
+    for (auto& b : bodies) {
+        if (b.invMass <= 0.0f) continue;
         const float lv = length(b.velocity);
         if (lv > params.maxLinearVelocity) {
             b.velocity = b.velocity * (params.maxLinearVelocity / lv);
@@ -254,17 +277,39 @@ void PhysicsWorld::solveJoints(float dt) {
                     if (eff > 1e-12f) {
                         const float relSpin =
                             dot(B.angularVelocity - A.angularVelocity, axis);
-                        // Push back toward the limit, and cancel any velocity
-                        // still carrying the joint outward.
-                        const float bias = violation * invDt * params.baumgarte;
-                        const float outward =
-                            (violation > 0.0f) ? std::min(relSpin, 0.0f)
-                                               : std::max(relSpin, 0.0f);
-                        const float lambda = (bias - outward) / eff;
 
-                        const V3 imp = axis * lambda;
-                        A.angularVelocity += ia * (-imp);
-                        B.angularVelocity += ib * imp;
+                        // Drive the relative spin *to* the recovery rate, not
+                        // add the recovery rate to it.
+                        //
+                        // This used to read (bias - outward), which on the
+                        // first iteration is right and on the next 63 is a
+                        // disaster. jointAngle only changes when positions are
+                        // integrated, at the end of the substep, so `violation`
+                        // -- and therefore `bias` -- is constant across the
+                        // whole Gauss-Seidel sweep. Once the first iteration
+                        // had satisfied the constraint, `outward` was zero and
+                        // every later iteration re-applied the full impulse
+                        // again, so the joint left the sweep spinning at
+                        // iterations * bias. At 64 iterations and a 125 us
+                        // substep that turned a 0.5 rad overshoot into 180,000
+                        // rad/s; measured peak joint rates during a jump were
+                        // 204,000 rad/s, where a real fly's fastest leg joint
+                        // does a few hundred. Targeting the velocity instead
+                        // makes the constraint idempotent, which is what lets
+                        // it be swept repeatedly.
+                        float bias = violation * invDt * params.baumgarte;
+                        bias = std::clamp(bias, -params.maxCorrectionVelocity,
+                                          params.maxCorrectionVelocity);
+                        const float lambda = (bias - relSpin) / eff;
+
+                        // One-sided: a joint stop pushes back into range and
+                        // never pulls. If the joint is already recovering
+                        // faster than the bias asks for, leave it alone.
+                        if ((violation > 0.0f) == (lambda > 0.0f)) {
+                            const V3 imp = axis * lambda;
+                            A.angularVelocity += ia * (-imp);
+                            B.angularVelocity += ib * imp;
+                        }
                     }
                 }
             }
@@ -492,6 +537,7 @@ void PhysicsWorld::step(float dt) {
     buildGroundContacts();
     solveJoints(dt);
     solveContacts(dt);
+    clampVelocities();
     integratePositions(dt);
 }
 

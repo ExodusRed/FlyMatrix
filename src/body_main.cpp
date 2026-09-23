@@ -193,6 +193,8 @@ int run(int argc, char** argv) {
     bool usePhysics = true;
     float dropMs = 0.0f;
     float muscleTorque = -1.0f;
+    float hillVmax = -1.0f, hillTaper = -1.0f, maxAngVel = -1.0f;
+    int hillOn = -1;
     int forceJoint = -1;
     float forceDrive = 0.0f;
     float corrVel = -1.0f;
@@ -224,6 +226,10 @@ int run(int argc, char** argv) {
         else if (a == "--no-physics") usePhysics = false;
         else if (a == "--drop") dropMs = std::stof(next("--drop"));
         else if (a == "--muscle-torque") muscleTorque = std::stof(next("--muscle-torque"));
+        else if (a == "--hill-vmax") hillVmax = std::stof(next("--hill-vmax"));
+        else if (a == "--hill-taper") hillTaper = std::stof(next("--hill-taper"));
+        else if (a == "--no-hill") hillOn = 0;
+        else if (a == "--max-angvel") maxAngVel = std::stof(next("--max-angvel"));
         else if (a == "--force-joint") {
             const std::string jn = next("--force-joint");
             for (int j = 0; j < kJointCount; ++j) {
@@ -277,6 +283,10 @@ int run(int argc, char** argv) {
     FlyBody body;
     FlyPhysics phys;
     if (muscleTorque > 0.0f) phys.params.maxMuscleTorque = muscleTorque;
+    if (hillVmax > 0.0f) phys.params.hillShorteningRate = hillVmax;
+    if (hillTaper > 0.0f) phys.params.hillTaperFrac = hillTaper;
+    if (hillOn == 0) phys.params.hillMuscle = false;
+    if (maxAngVel > 0.0f) phys.world.params.maxAngularVelocity = maxAngVel;
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
     if (usePhysics) phys.build(body);
@@ -329,15 +339,26 @@ int run(int argc, char** argv) {
         const int neuralPerPhys = static_cast<int>(1.0f / params.dtMs);
         const int n = static_cast<int>(dropMs / 1000.0f / physDt);
         float stimLeft = (pulseMs > 0.0f) ? pulseMs : dropMs;
+        std::uint32_t spikesThisMs = 0;
         for (const auto i : driven) net.setStimulus(i, 200.0f);
 
         std::printf("running %.0f ms: %zu driven neuron(s), physics at %.0f Hz\n",
                     dropMs, driven.size(), 1.0f / physDt);
-        std::printf("%8s %10s %10s %9s %9s\n",
-                    "t (ms)", "height", "peak", "contacts", "CTr act");
+        // CTr act is the largest activation on either side of the joint;
+        // CTr drv is the net of the two. When act is high and drv is near
+        // zero the antagonists are firing together and cancelling, which
+        // looks identical to "the muscle is working" in the activation
+        // column alone.
+        std::printf("%8s %10s %10s %9s %9s %9s %9s\n",
+                    "t (ms)", "height", "peak", "contacts", "CTr act",
+                    "CTr drv", "spikes");
         for (int i = 0; i < n; ++i) {
+            // Spikes across this physics step's worth of neural steps. A
+            // stimulus that has ended should show this decaying; if it does
+            // not, the network is self-sustaining rather than settling.
+            spikesThisMs = 0;
             for (int k = 0; k < neuralPerPhys; ++k) {
-                net.step();
+                spikesThisMs += net.step().spikeCount;
                 pools.accumulate(net);
                 if (stimLeft > 0.0f) {
                     stimLeft -= params.dtMs;
@@ -366,14 +387,17 @@ int run(int argc, char** argv) {
 
             if (i % std::max(1, n / 12) == 0 || i == n - 1) {
                 // Coxa-trochanter is where the jump muscle pulls.
-                float ctr = 0.0f;
+                float ctr = 0.0f, ctrDrive = 0.0f;
                 for (int l = 0; l < kLegCount; ++l) {
                     ctr = std::max(ctr,
                         pools.peakActivation(l, static_cast<int>(Joint::CTr)));
+                    const float d = pools.drive(l, static_cast<int>(Joint::CTr));
+                    if (std::fabs(d) > std::fabs(ctrDrive)) ctrDrive = d;
                 }
-                std::printf("%8.0f %10.4f %10.4f %9zu %9.3f\n",
+                std::printf("%8.0f %10.4f %10.4f %9zu %9.3f %9.3f %9u\n",
                             i * physDt * 1000.0f, phys.bodyHeight(),
-                            phys.peakHeight(), phys.world.contacts.size(), ctr);
+                            phys.peakHeight(), phys.world.contacts.size(), ctr,
+                            ctrDrive, spikesThisMs);
             }
             if (!std::isfinite(phys.bodyHeight()) ||
                 std::fabs(phys.bodyHeight()) > 1e4f) {
@@ -381,8 +405,24 @@ int run(int argc, char** argv) {
                 return 2;
             }
         }
-        std::printf("\nfinal %.4f mm, peak %.4f mm\n",
-                    phys.bodyHeight(), phys.peakHeight());
+        std::printf("\nfinal %.4f mm, peak %.4f mm, peak joint rate %.0f rad/s\n",
+                    phys.bodyHeight(), phys.peakHeight(), phys.peakJointRate());
+        // Physical cross-check. Units are micrograms, millimetres and seconds,
+        // so a torque of 1 is 1e-15 N m and a force of 1 is 1e-12 N. Body
+        // weight is the natural yardstick: a fly weighs about 10 uN, and
+        // Azevedo et al. measure a single fast leg motor neuron at about 10 uN
+        // of muscle force, so one fast motor unit is roughly one body weight.
+        {
+            const float mass = phys.totalMass();          // ug
+            const float weight = mass * 9810.0f;          // ug mm/s^2
+            const float peakTorque =
+                phys.peakDrive() * phys.params.maxMuscleTorque;
+            const float arm = 0.3f;                       // mm, typical
+            std::printf("mass %.0f ug (weight %.2f uN), peak drive %.2f, "
+                        "peak torque %.2e = %.1f body weights at %.1f mm arm\n",
+                        mass, weight * 1e-6f, phys.peakDrive(), peakTorque,
+                        peakTorque / (weight * arm), arm);
+        }
         return 0;
     }
 

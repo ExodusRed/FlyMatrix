@@ -65,6 +65,26 @@ public:
         // how far it shifts the joint's target angle.
         float muscleExcursionRad = 0.9f;
 
+        // Hill muscle mechanics, both of which our muscles lacked.
+        //
+        // Force-length: a muscle produces its peak force near one length
+        // and almost none fully shortened or fully stretched. Without it a
+        // muscle keeps pulling at the end of its range, which is a large
+        // part of why sustained drive made the fly climb: it was pushing
+        // against its own joint stops indefinitely.
+        //
+        // Force-velocity: force falls as a muscle shortens quickly, and
+        // rises somewhat when it is being stretched. That is real physical
+        // damping, and a limb without it has nothing opposing fast motion.
+        bool hillMuscle = true;
+        // Joint rate, rad/s, at which shortening force halves.
+        float hillShorteningRate = 12.0f;
+        // Force multiplier when the muscle is being stretched instead.
+        float hillLengtheningGain = 1.4f;
+        // Fraction of the distance to a joint limit over which force
+        // tapers to nothing.
+        float hillTaperFrac = 0.35f;
+
         // 8 kHz keeps the stiff joint springs inside their stability limit;
         // at 4 kHz the solver diverges within a couple of milliseconds.
         // Diagnostic: when forceJoint is a valid joint index, every leg's
@@ -74,6 +94,11 @@ public:
         // sign conventions.
         int forceJoint = -1;
         float forceDrive = 0.0f;
+        // Restrict the diagnostic drive to one leg. The six legs do not
+        // all sit in the same joint configuration, so a whole-body
+        // average can read as "no effect" when legs are in fact pushing
+        // hard in opposite directions.
+        int forceLeg = -1;  // -1 drives every leg
 
         float substepHz = 8000.0f;  // physics steps per simulated second
     };
@@ -102,6 +127,15 @@ public:
     // Highest point the thorax has reached since the last reset, which is how
     // a jump is measured.
     float peakHeight() const { return peakHeight_; }
+    // Largest joint speed the muscle model has been asked about, rad/s.
+    // Calibrating a force-velocity curve needs to know the range.
+    float peakJointRate() const { return peakJointRate_; }
+    // Largest |drive| any joint has been commanded with. drive is in
+    // units of median-motor-neuron force, so peak torque in physical
+    // units is this times maxMuscleTorque.
+    float peakDrive() const { return peakDrive_; }
+    // Total mass of every body, micrograms.
+    float totalMass() const;
     bool airborne() const { return airborne_; }
 
     // Which probe index is which, so a contact can be named rather than
@@ -139,6 +173,7 @@ public:
 private:
     void advance(float dtSeconds);
     void applyDrive(HingeJoint& hj, float restAngle, float drive) const;
+    float hillFactor(const HingeJoint& hj, float drive) const;
 
     struct SegmentRef {
         std::uint32_t body;
@@ -155,6 +190,8 @@ private:
     std::array<std::array<float, kJointCount>, kLegCount> restAngle_{};
 
     float peakHeight_ = 0.0f;
+    mutable float peakJointRate_ = 0.0f;
+    float peakDrive_ = 0.0f;
     bool airborne_ = false;
     float restHeight_ = 0.0f;
     std::array<float, kLegCount> legSpanRest_{};

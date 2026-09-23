@@ -210,8 +210,13 @@ public:
     // measurement is describing a body that is quietly falling apart.
     float maxAnchorError() const;
 
+    // Rate of change of a hinge's angle, rad/s, positive in the same
+    // direction the angle is measured.
+    float jointRate(const HingeJoint& j) const;
+
 private:
     void integrateVelocities(float dt);
+    void clampVelocities();
     void solveJoints(float dt);
     void solveContacts(float dt);
     void integratePositions(float dt);

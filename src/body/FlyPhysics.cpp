@@ -171,7 +171,10 @@ void FlyPhysics::step(float dtSeconds) {
     for (int l = 0; l < kLegCount; ++l) {
         for (int j = 0; j < kJointCount; ++j) {
             HingeJoint& hj = world.joints[jointIndex_[l][j]];
-            const float d = (params.forceJoint == j) ? params.forceDrive : 0.0f;
+            const bool legSelected =
+                (params.forceLeg < 0 || params.forceLeg == l);
+            const float d = (params.forceJoint == j && legSelected)
+                                ? params.forceDrive : 0.0f;
             applyDrive(hj, restAngle_[l][j], d);
         }
     }
@@ -192,6 +195,7 @@ void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
             HingeJoint& hj = world.joints[jointIndex_[l][j]];
             const float d = (params.forceJoint == j) ? params.forceDrive
                                                     : pools.drive(l, j);
+            peakDrive_ = std::max(peakDrive_, std::fabs(d));
             applyDrive(hj, restAngle_[l][j], d);
         }
     }
@@ -204,6 +208,42 @@ void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
 // activation returns a large number -- so the excursion saturates while the
 // torque budget keeps growing, which is what makes a jump muscle different
 // from a postural one rather than just louder.
+// Hill force modifiers, both a function of where the joint is and how fast it
+// is moving. Applied to the net drive rather than per muscle, which is coarse
+// but captures the two effects that matter: a muscle at the end of its travel
+// produces no force, and one shortening quickly produces less.
+float FlyPhysics::hillFactor(const HingeJoint& hj, float drive) const {
+    if (!params.hillMuscle || drive == 0.0f) return 1.0f;
+
+    // Force-length. Taper toward zero as the joint approaches the limit the
+    // muscle is pulling it toward. A muscle cannot keep contracting once it
+    // has run out of travel, which is what let sustained drive push against
+    // the joint stops indefinitely.
+    const float angle = world.jointAngle(hj);
+    const float toward = (drive > 0.0f) ? hj.maxAngle : hj.minAngle;
+    const float span = std::fabs(toward - angle);
+    const float taper = std::fabs(hj.maxAngle - hj.minAngle) * params.hillTaperFrac;
+    const float lengthFactor = taper > 1e-6f ? std::clamp(span / taper, 0.0f, 1.0f)
+                                             : 1.0f;
+
+    // Force-velocity. Shortening against the direction of pull costs force,
+    // hyperbolically as in Hill's relation; being stretched yields more.
+    const float rate = world.jointRate(hj);
+    peakJointRate_ = std::max(peakJointRate_, std::fabs(rate));
+    const float shortening = (drive > 0.0f) ? rate : -rate;
+    float velocityFactor;
+    if (shortening > 0.0f) {
+        velocityFactor = params.hillShorteningRate /
+                         (params.hillShorteningRate + shortening);
+    } else {
+        const float g = params.hillLengtheningGain;
+        velocityFactor = g - (g - 1.0f) * params.hillShorteningRate /
+                                 (params.hillShorteningRate - shortening);
+    }
+
+    return lengthFactor * velocityFactor;
+}
+
 void FlyPhysics::applyDrive(HingeJoint& hj, float restAngle, float drive) const {
     // Posture and contraction are separate. The servo always holds the rest
     // angle with a fixed torque budget; the muscle adds a feed-forward torque
@@ -219,7 +259,7 @@ void FlyPhysics::applyDrive(HingeJoint& hj, float restAngle, float drive) const 
     // opposing muscles instead of fighting them.
     hj.maxTorque = params.postureTorque / (1.0f + std::fabs(drive));
     hj.servoRate = params.servoRate;
-    hj.muscleTorque = drive * params.maxMuscleTorque;
+    hj.muscleTorque = drive * params.maxMuscleTorque * hillFactor(hj, drive);
 }
 
 void FlyPhysics::advance(float dtSeconds) {
@@ -232,6 +272,14 @@ void FlyPhysics::advance(float dtSeconds) {
     const float z = world.bodies[thorax_].position.z;
     peakHeight_ = std::max(peakHeight_, z);
     airborne_ = world.contacts.empty();
+}
+
+float FlyPhysics::totalMass() const {
+    float m = 0.0f;
+    for (const auto& b : world.bodies) {
+        if (b.invMass > 0.0f) m += 1.0f / b.invMass;
+    }
+    return m;
 }
 
 void FlyPhysics::readPose(std::vector<FlyBody::SegmentPose>& out) const {
