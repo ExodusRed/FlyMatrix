@@ -104,8 +104,21 @@ void FlyPhysics::build(const FlyBody& skeleton) {
             // orientation, not the child's. Using the child's rotated every
             // hinge below ThC onto the wrong axis, which left the legs able to
             // splay but never to extend, and so unable to lift the body at all.
-            const V3 worldAxis =
-                world.bodies[parent].orientation.rotate(leg.joints[j].axis);
+            //
+            // ThC is the exception. Its parent is the thorax, and the leg is
+            // mounted on it with a fixed outward tilt that is not a joint, so
+            // it appears in no body's orientation. The tilt has to be folded
+            // in here or ThC would hinge about the thorax's lateral axis
+            // instead of the leg's, and the skeleton and the physics would
+            // disagree about the one joint that takes a step.
+            //
+            // Only the world axis uses that frame. axisA is still expressed in
+            // body A's own frame, because the solver recovers the world axis
+            // with A.orientation.rotate(axisA).
+            const Quat parentFrame =
+                (j == 0) ? (world.bodies[parent].orientation * leg.mount).normalised()
+                         : world.bodies[parent].orientation;
+            const V3 worldAxis = parentFrame.rotate(leg.joints[j].axis);
             const M3 ra = M3::fromQuat(world.bodies[parent].orientation);
             const M3 rb = M3::fromQuat(rot);
             hj.axisA = ra.transposed() * worldAxis;

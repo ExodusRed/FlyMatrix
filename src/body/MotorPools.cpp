@@ -65,11 +65,16 @@ constexpr MuscleProfile kProfiles[] = {
 // sideways and the fly sank. Re-run `flyphys` after any change to the leg
 // axes or the rest pose, because these signs follow from both.
 constexpr float kJointDriveSign[kJointCount] = {
-    -1.0f,  // ThC   measured: -15 lifts
-    +1.0f,  // CTr   measured: +15 lifts
-    +1.0f,  // TrF   neither direction lifts much
+    // ThC is judged on propulsion, not lift. It protracts and retracts, so it
+    // is supposed to move the body fore-aft while leaving its height alone.
+    // flyphys test 4: +15 travels +0.80 mm forward, -15 travels back. A
+    // protractor pulling the leg forward against a planted foot pushes the
+    // body backward, so positive drive maps to negative angle.
+    -1.0f,  // ThC   measured: +15 propels forward, -15 backward
+    -1.0f,  // CTr   measured: -15 lifts  (was +1; test 2 says +15 sinks)
+    +1.0f,  // TrF   measured: +15 lifts
     -1.0f,  // FTi   measured: -15 lifts, and lifts most
-    +1.0f,  // TiTa  measured: +15 lifts
+    -1.0f,  // TiTa  measured: -15 lifts  (was +1; test 2 says +15 sinks)
 };
 
 const MuscleProfile& profileFor(const std::string& muscleName) {

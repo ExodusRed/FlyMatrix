@@ -49,6 +49,12 @@ struct Leg {
     LegId id{};
     V3 attach;        // where the coxa meets the thorax, in body frame
     float mirror = 1.0f;  // -1 for left legs, flipping the lateral axis
+    // Fixed outward tilt of the whole leg at its attachment, before any joint
+    // angle applies. A fly's coxae project ventrolaterally from the thorax as
+    // a matter of structure, not posture, and modelling that as a joint angle
+    // cost us the one degree of freedom that matters for walking -- see the
+    // ThC comment in FlyBody.cpp.
+    Quat mount{};
     std::array<JointSpec, kJointCount> joints{};
     std::array<float, kJointCount> angle{};  // current, radians
 };

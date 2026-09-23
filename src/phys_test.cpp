@@ -28,6 +28,10 @@ constexpr float kDt = 0.001f;  // seconds
 struct Result {
     float height;
     float peak;
+    // Fore-aft travel of the thorax. ThC protracts and retracts, so
+    // "does it lift" is the wrong question for it -- the right one is
+    // whether it drives the body forward.
+    float travelX;
     std::size_t contacts;
     float anchorError;
     float footLateral;
@@ -95,6 +99,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
         }
     }
     r.height = phys.bodyHeight();
+    r.travelX = phys.thorax().position.x;
     r.peak = phys.peakHeight();
     r.contacts = phys.world.contacts.size();
     r.anchorError = phys.world.maxAnchorError();
@@ -302,6 +307,11 @@ int main(int argc, char** argv) {
     }
     std::printf("\n");
 
+    // --stand-only was parsed and then never read, so it ran the whole suite
+    // -- now 71 separate 300 ms simulations -- every time it was used as a
+    // quick regression check.
+    if (g_standOnly) return stands ? 0 : 2;
+
     std::printf("=== 2. does each joint respond to torque, and does it lift? ===\n");
     std::printf("baseline height %.4f, joint angles all start at 0\n\n", base.height);
     std::printf("%-6s %7s %10s %10s  %s\n",
@@ -356,6 +366,34 @@ int main(int argc, char** argv) {
                                  : up           ? "all lift"
                                  : down         ? "all sink"
                                                 : "no effect");
+        }
+    }
+
+    // --- 4. propulsion ---------------------------------------------------
+    //
+    // Lift is the wrong question for ThC. Its motor neurons are named
+    // promotor and remotor in the connectome -- they swing the leg fore and
+    // aft, which is the step. A joint that propels the body along X while
+    // keeping it at height is doing its job even though tests 2 and 3 would
+    // score it "moves, no lift".
+    //
+    // Walking needs exactly this: a joint whose two directions drive the body
+    // forward and backward, consistently across all six legs.
+    std::printf("\n=== 4. can any joint propel the body fore-aft? ===\n");
+    std::printf("%-6s %7s %11s %11s  %s\n",
+                "joint", "drive", "travel x", "height", "verdict");
+    for (int j = 0; j < kJointCount; ++j) {
+        for (const float d : {-15.0f, 15.0f}) {
+            const Result r = run(g_ms, j, d);
+            const float dx = r.travelX - base.travelX;
+            const float dz = r.height - base.height;
+            const char* verdict;
+            if (r.diverged) verdict = "DIVERGED";
+            else if (std::fabs(dx) < 0.02f) verdict = "no travel";
+            else if (dz < -0.06f) verdict = "travels, but collapses";
+            else verdict = (dx > 0.0f) ? "FORWARD" : "BACKWARD";
+            std::printf("%-6s %+7.1f %+11.4f %+11.4f  %s\n",
+                        jointName(static_cast<Joint>(j)), d, dx, dz, verdict);
         }
     }
 

@@ -10,9 +10,9 @@ namespace {
 // Left and right legs are mirror images through the XZ plane. Reflecting a
 // rotation negates the axis components that lie in the mirror plane: an axis
 // along Y survives unchanged, while axes along X or Z flip. So the joints
-// hinging about the lateral axis (ThC, FTi, TiTa) share one axis across both
-// sides, and those hinging about the fore-aft or vertical axis (CTr, TrF) get
-// multiplied by the side. Getting this backwards leaves the two sides in
+// hinging about the lateral axis (ThC, CTr, FTi, TiTa) share one axis across
+// both sides, and those about the fore-aft or vertical axis (the leg mount
+// and TrF) get multiplied by the side. Getting this backwards leaves the two sides in
 // visibly different poses.
 constexpr V3 kForward{1, 0, 0};
 constexpr V3 kLeft{0, 1, 0};
@@ -23,6 +23,10 @@ struct LegLayout {
     float attachX;     // along the body, positive toward the head
     float side;        // +1 left, -1 right
     float lengthScale; // hind legs are the longest, front the shortest
+    // Fixed outward tilt of the leg at its mounting, radians. Seeded from the
+    // ThC rest angles this joint used to hold before ThC became the fore-aft
+    // swing, so the standing splay is unchanged.
+    float splay;
     // Rest angles for ThC, CTr, TrF, FTi, TiTa. Solved by
     // tools/solve_rest_pose.py so all six feet land on the ground at once --
     // five coupled angles per leg is not something to fit by eye.
@@ -33,15 +37,19 @@ struct LegLayout {
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
 constexpr LegLayout kLayout[kLegCount] = {
-    {LegId::FrontL,   0.34f, +1.0f, 0.88f, {0.657f, 0.541f, 0.066f, -2.284f, 0.272f}},
-    {LegId::FrontR,   0.34f, -1.0f, 0.88f, {0.657f, 0.541f, 0.066f, -2.284f, 0.272f}},
-    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, {0.909f, -1.477f, -0.011f, 1.624f, 1.397f}},
-    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, {0.909f, -1.477f, -0.011f, 1.624f, 1.397f}},
-    // The hind knee bends the opposite way to the others, so its tibia swings
-    // forward rather than back. Forcing all six to fold alike leaves the hind
-    // leg unable to reach behind the body at all.
-    {LegId::HindL,   -0.30f, +1.0f, 1.12f, {0.893f, -0.724f, 0.008f, 2.073f, 0.481f}},
-    {LegId::HindR,   -0.30f, -1.0f, 1.12f, {0.893f, -0.724f, 0.008f, 2.073f, 0.481f}},
+    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, {-0.841f, -1.446f, -0.072f,  2.081f, 0.374f}},
+    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, {-0.841f, -1.446f, -0.072f,  2.081f, 0.374f}},
+    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, {-0.515f, -1.194f, -0.011f,  2.288f, 0.457f}},
+    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, {-0.515f, -1.194f, -0.011f,  2.288f, 0.457f}},
+    // All six legs now fold the same way -- CTr negative, FTi positive -- and
+    // reach fore and aft with ThC instead. The rest-pose solver picks that
+    // configuration once for the whole animal and scores it 83x better than
+    // the next best, so the legs agreeing is not a constraint imposed against
+    // the geometry's wishes; it is what the geometry prefers once ThC is free
+    // to swing. The ThC gradient across the leg pairs, -0.841 front to -0.061
+    // hind, is what used to be faked by folding the front legs backwards.
+    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, {-0.061f, -0.655f,  0.008f,  2.127f, 0.365f}},
+    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, {-0.061f, -0.655f,  0.008f,  2.127f, 0.365f}},
 };
 
 // Segment lengths for a middle leg, in millimetres, scaled per leg above.
@@ -91,11 +99,28 @@ FlyBody::FlyBody() {
         // each joint's axis is chosen for what it does to a downward-hanging
         // leg, and the chain rotates the frame as it goes.
         //
-        // ThC abducts: it swings the whole leg out from the body, about the
-        // fore-aft axis. Mirroring the axis per side means the same positive
-        // angle splays both legs away from the midline.
-        leg.joints[0] = {kForward * L.side, L.rest[0], -0.4f, 1.6f,
-                         kCoxaLen * s, 0.045f};
+        // The leg is mounted with a fixed outward tilt about the fore-aft
+        // axis, so it projects ventrolaterally the way a fly's coxa does.
+        // This used to be ThC's rest angle, which meant the joint spent its
+        // only degree of freedom holding a posture.
+        leg.mount = Quat::axisAngle(kForward * L.side, L.splay);
+
+        // ThC protracts and retracts: it swings the whole leg forward and
+        // back, which is the step. The axis is lateral, so it rotates the leg
+        // in the fore-aft plane while leaving the mount's outward tilt alone.
+        //
+        // This was an abduction axis, and that was wrong on the data's own
+        // terms. The connectome names this joint's motor neurons "Tergopleural/
+        // Pleural promotor MN", "Pleural remotor/abductor MN", "Sternal
+        // anterior rotator MN" and "Sternal posterior rotator MN" -- promotor
+        // and remotor, 62 motor neurons whose job is swinging the leg fore and
+        // aft. Wiring them to lateral splay left the model with no joint that
+        // could take a step, and forced the rest-pose solver to reach forward
+        // with the front legs and backward with the hind legs using CTr and
+        // FTi in opposite directions. That is why the six legs disagreed about
+        // which way a joint lifts (flyphys test 3), and why one "extend"
+        // command extended some legs and flexed others.
+        leg.joints[0] = {kLeft, L.rest[0], -0.9f, 0.9f, kCoxaLen * s, 0.045f};
         // CTr depresses: it swings the femur down within the leg's own plane,
         // about the local lateral axis. This is the joint the tergotrochanteral
         // jump muscle acts on, and it is the joint that levers the body off the
@@ -134,8 +159,9 @@ float FlyBody::angle(LegId leg, Joint j) const {
 void FlyBody::worldPose(std::vector<SegmentPose>& out) const {
     out.clear();
     for (const auto& leg : legs_) {
-        // Start at the coxa attachment, in world space.
-        Transform frame = root * Transform{leg.attach, Quat{}, 1.0f};
+        // Start at the coxa attachment, in world space, tilted outward by the
+        // leg's fixed mount.
+        Transform frame = root * Transform{leg.attach, leg.mount, 1.0f};
 
         for (int j = 0; j < kJointCount; ++j) {
             const JointSpec& spec = leg.joints[j];
@@ -157,7 +183,7 @@ void FlyBody::worldPose(std::vector<SegmentPose>& out) const {
 
 V3 FlyBody::footPosition(LegId leg) const {
     const Leg& L = legs_[static_cast<int>(leg)];
-    Transform frame = root * Transform{L.attach, Quat{}, 1.0f};
+    Transform frame = root * Transform{L.attach, L.mount, 1.0f};
     for (int j = 0; j < kJointCount; ++j) {
         frame.rotation = (frame.rotation *
                           Quat::axisAngle(L.joints[j].axis, L.angle[j])).normalised();
