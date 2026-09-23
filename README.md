@@ -11,7 +11,8 @@ lights them as they fire.
 ## Layout
 
 ```
-tools/       Python, run once: pull the connectome, pack it, derive the motor map
+tools/       Python, run once: pull the connectome, pack it, derive the maps
+docs/        what the literature says about the problems we hit
 src/core/    simulation engine (no dependencies)
 src/engine/  maths and mesh generation
 src/body/    fly skeleton and the motor-neuron-to-muscle bridge
@@ -546,6 +547,12 @@ Four candidates, in rough order of how much they probably matter:
 - **No delay, gating or gain control.** Real reflex loops have conduction
   delays and presynaptic inhibition that sets their gain by behavioural
   state. Here the loop runs flat out, every millisecond.
+
+Reading around this afterwards sharpened it further: the *sign* of the
+reflex is not in the connectome at all. The same FeCO input excites flexors
+at rest and can inhibit them during walking -- reflex reversal -- so the
+same anatomy implements a stabilising controller or a destabilising one
+depending on behavioural state. See [docs/findings.md](docs/findings.md).
 
 The honest summary is that the connectome gives the wiring but not the
 sensory encoding, and the encoding is what a feedback loop is made of. This
