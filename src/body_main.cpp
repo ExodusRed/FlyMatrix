@@ -26,6 +26,7 @@
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
+#include "body/SensoryOrgans.h"
 #include "core/Connectome.h"
 #include "core/DataPath.h"
 #include "core/LIFNetwork.h"
@@ -195,6 +196,9 @@ int run(int argc, char** argv) {
     int forceJoint = -1;
     float forceDrive = 0.0f;
     float corrVel = -1.0f;
+    bool useSensory = true;
+    float extraLoad = 0.0f;
+    float sensoryDrive = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -224,6 +228,9 @@ int run(int argc, char** argv) {
         }
         else if (a == "--force-drive") forceDrive = std::stof(next("--force-drive"));
         else if (a == "--corr") corrVel = std::stof(next("--corr"));
+        else if (a == "--no-sensory") useSensory = false;
+        else if (a == "--load") extraLoad = std::stof(next("--load"));
+        else if (a == "--sensory-drive") sensoryDrive = std::stof(next("--sensory-drive"));
         else throw std::runtime_error("unknown option: " + a);
     }
 
@@ -233,6 +240,16 @@ int run(int argc, char** argv) {
     const auto names = NeuronNames::load(dataDir + "/cns_names.tsv",
                                          conn.neuronCount(), &haveNames);
     auto pools = MotorPools::load(dataDir + "/motor_map.tsv");
+
+    // The return half of the loop. Optional only so the difference it makes
+    // can be measured against its absence.
+    SensoryOrgans::Params sensoryParams;
+    if (sensoryDrive >= 0.0f) sensoryParams.maxDrive = sensoryDrive;
+    SensoryOrgans sensory =
+        SensoryOrgans::load(dataDir + "/sensory_map.tsv", sensoryParams);
+    std::printf("proprioceptors: %zu chordotonal, %zu campaniform%s\n",
+                sensory.chordotonalCount(), sensory.campaniformCount(),
+                useSensory ? "" : "  (DISABLED)");
     std::printf("%u neurons, %zu motor neurons mapped to leg joints\n",
                 conn.neuronCount(), pools.mappedNeurons());
 
@@ -318,11 +335,28 @@ int run(int argc, char** argv) {
                 pools.accumulate(net);
                 if (stimLeft > 0.0f) {
                     stimLeft -= params.dtMs;
-                    if (stimLeft <= 0.0f) net.clearStimulus();
+                    // clearStimulus() wipes every stimulus, sensory included.
+                    // sense() restores the proprioceptive drive below, so the
+                    // loss lasts one step, but only the driven neurons should
+                    // be silenced here.
+                    if (stimLeft <= 0.0f) {
+                        for (const auto d : driven) net.setStimulus(d, 0.0f);
+                    }
                 }
             }
             pools.update(1.0f);
+
+            // A steady extra weight on the thorax. This is the perturbation
+            // the proprioceptive loop is supposed to resist: with the loop
+            // open the fly simply sags under it.
+            if (extraLoad != 0.0f) {
+                phys.world.bodies[0].force += V3{0, 0, -extraLoad};
+            }
             phys.step(physDt, pools);
+
+            // Body state drives the proprioceptors, which drive the network on
+            // the next step. This is the only place anything flows backwards.
+            if (useSensory) sensory.sense(phys, net, 1.0f);
 
             if (i % std::max(1, n / 12) == 0 || i == n - 1) {
                 // Coxa-trochanter is where the jump muscle pulls.
@@ -449,6 +483,9 @@ int run(int argc, char** argv) {
         if (!usePhysics) pools.applyToSkeleton(body);
         if (usePhysics) {
             phys.step(frameMs / 1000.0f, pools);
+            // Close the loop: body state drives the proprioceptors, which
+            // drive the network on the next frame.
+            if (useSensory) sensory.sense(phys, net, frameMs);
             phys.readPose(segments);
         } else {
             body.worldPose(segments);

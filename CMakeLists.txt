@@ -27,6 +27,7 @@ add_library(flycore STATIC
   src/body/FlyBody.cpp
   src/body/FlyPhysics.cpp
   src/body/MotorPools.cpp
+  src/body/SensoryOrgans.cpp
   src/engine/Physics.cpp
 )
 target_include_directories(flycore PUBLIC src)

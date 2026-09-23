@@ -139,9 +139,27 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     world.probes.push_back({head_, {0.0f, 0, -0.19f}, 0.05f});
 
     world.prepare();
+    for (int l = 0; l < kLegCount; ++l) legSpanRest_[l] = legSpan(l);
     restHeight_ = world.bodies[thorax_].position.z;
     peakHeight_ = restHeight_;
     airborne_ = false;
+}
+
+float FlyPhysics::legSpan(int leg) const {
+    const std::size_t base = static_cast<std::size_t>(leg) * kJointCount;
+    const RigidBody& coxa = world.bodies[segments_[base].body];
+    const SegmentRef& tip = segments_[base + kJointCount - 1];
+    const RigidBody& tarsus = world.bodies[tip.body];
+    const V3 foot = tarsus.position + tarsus.orientation.rotate({0, 0, -tip.length});
+    return length(foot - coxa.position);
+}
+
+float FlyPhysics::footLoad(int leg) const {
+    float load = 0.0f;
+    for (const auto& c : world.contacts) {
+        if (c.probe == static_cast<std::uint32_t>(leg)) load += c.normalImpulse;
+    }
+    return load;
 }
 
 void FlyPhysics::reset(const FlyBody& skeleton) {

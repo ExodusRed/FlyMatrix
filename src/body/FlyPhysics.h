@@ -111,6 +111,20 @@ public:
         return false;
     }
 
+    // What a leg's proprioceptors actually measure.
+    //
+    // Chordotonal organs report the leg's configuration and campaniform
+    // sensilla the load on it. Neither is resolved per joint here, because
+    // the connectome cannot tell us which joint a given sensory neuron
+    // watches (see tools/sensory_map.py), so both are reported per leg.
+
+    // Straight-line distance from the leg's attachment to its foot.
+    float legSpan(int leg) const;
+    // The same distance in the pose the body was built in.
+    float legSpanRest(int leg) const { return legSpanRest_[leg]; }
+    // Normal impulse currently carried by this leg's foot, 0 if airborne.
+    float footLoad(int leg) const;
+
     void reset(const FlyBody& skeleton);
 
     PhysicsWorld world;
@@ -136,6 +150,7 @@ private:
     float peakHeight_ = 0.0f;
     bool airborne_ = false;
     float restHeight_ = 0.0f;
+    std::array<float, kLegCount> legSpanRest_{};
 };
 
 }  // namespace fly

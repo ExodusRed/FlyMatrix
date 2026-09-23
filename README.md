@@ -468,6 +468,90 @@ descending neuron so movement is expected, but the magnitude is not.
   contacts are point probes with no swept test.
 - **Slow.** 64 iterations at an 8 kHz substep is far from real time.
 
+## Closing the sensorimotor loop
+
+```sh
+python tools/sensory_map.py               # once, after motor_map.py
+./build/Release/flybody --drop 400 --load 5e7             # loop closed
+./build/Release/flybody --drop 400 --load 5e7 --no-sensory  # loop open
+```
+
+Until this existed the nervous system could command the body but never hear
+back from it. 254 chordotonal organ neurons, which report a leg's
+configuration, and 72 campaniform sensilla, which report the load on it, are
+now driven by the state of the simulated body.
+
+### Finding which leg a proprioceptor belongs to
+
+The motor map could be read off the names. Sensory neurons give us nothing:
+their cell bodies sit out in the leg itself, outside the imaged volume, so
+they carry no neuromere and no side, and names like SNpp50 say nothing about
+what they measure.
+
+Their wiring does. Following each one forward two hops and asking whose motor
+neurons it reaches recovers the assignment:
+
+```
+326 of 578  placed, >=80% of their reach onto one leg
+167         split across legs (intersegmental proprioceptors are real)
+ 85         reach no leg motor neurons at all
+```
+
+The same walk tallied **per joint** does not work, and the map says so. Its
+joint column just reproduces the size of each motor pool -- ThC 17% of
+sensory against 19% of motor, FTi 26% against 29%, TiTa 15% against 17% --
+which is what assigning at random in proportion to pool size would give.
+Nothing in the simulation uses that column. The walk finds which leg a
+proprioceptor serves, not which joint it watches.
+
+### The result: no resistance reflex
+
+Loading the thorax and comparing the loop open against closed:
+
+| added load | loop open | loop closed |
+|-----------:|----------:|------------:|
+| none | 0.578 mm | 0.572 mm |
+| 2e7 | 0.567 mm | 0.480 mm |
+| 5e7 | 0.549 mm | 0.322 mm |
+| 1e8 | 0.519 mm | 0.327 mm |
+
+Feedback makes it **worse** at every load. And it is not a gain that needs
+turning down: sweeping the drive from 10 to 150 gives 0.44, 0.45, 0.46, 0.32,
+0.43 -- not graded, not monotonic. That is an unstable loop, not a controller
+set wrong.
+
+Reading which muscles the feedback actually reaches explains it. Under load it
+drives ThC protractors to 0.94-1.00, `Ta levator` to 0.35 and `Tr flexor` to
+0.27 -- swing the leg forward, lift the foot, fold the leg. That is a
+**leg-lift response**, not a postural one. The fly picks its legs up when
+loaded, so of course it sags.
+
+### Why, and what it would take
+
+Four candidates, in rough order of how much they probably matter:
+
+- **All 254 chordotonal neurons receive the same signal.** The real femoral
+  chordotonal organ has functionally distinct subtypes -- claw neurons encode
+  position, hook neurons direction of movement, club neurons vibration -- and
+  nothing in this dataset distinguishes them. Driving them identically is
+  certainly wrong and is the most likely reason the response is incoherent.
+- **No joint resolution**, as above. A leg-level signal cannot produce a
+  joint-level correction even in principle.
+- **The posture servo already does the job.** The open-loop fly sags only
+  0.06 mm under eight times its own weight, so a reflex has nothing to
+  contribute and can only add noise. That servo is an engineering crutch
+  standing in for tonic motor drive the network does not produce: with it
+  below about 2e6 the fly collapses entirely. The nervous system is not
+  holding this animal up.
+- **No delay, gating or gain control.** Real reflex loops have conduction
+  delays and presynaptic inhibition that sets their gain by behavioural
+  state. Here the loop runs flat out, every millisecond.
+
+The honest summary is that the connectome gives the wiring but not the
+sensory encoding, and the encoding is what a feedback loop is made of. This
+is the clearest case in the project of a result that needed the experiment
+run rather than reasoned about.
+
 ## Caveats
 
 - **Positions.** 141,781 neurons (80%) have a real soma in the imaged volume.
