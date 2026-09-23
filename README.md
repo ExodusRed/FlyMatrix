@@ -472,8 +472,8 @@ descending neuron so movement is expected, but the magnitude is not.
 
 ```sh
 python tools/sensory_map.py               # once, after motor_map.py
-./build/Release/flybody --drop 400 --load 5e7             # loop closed
-./build/Release/flybody --drop 400 --load 5e7 --no-sensory  # loop open
+./build/Release/flybody --drop 400 --load 5e7 --sensory   # loop closed
+./build/Release/flybody --drop 400 --load 5e7             # loop open (default)
 ```
 
 Until this existed the nervous system could command the body but never hear
@@ -551,6 +551,12 @@ The honest summary is that the connectome gives the wiring but not the
 sensory encoding, and the encoding is what a feedback loop is made of. This
 is the clearest case in the project of a result that needed the experiment
 run rather than reasoned about.
+
+**The loop is off by default**, behind `--sensory`. Left on it does not
+merely fail to help: the giant fibre stops jumping (3.75 mm down to 0.62)
+and a Kenyon cell starts moving the fly (0.62 up to 0.79), which inverts
+the specificity result everything else rests on. Feedback this noisy is
+worse than none.
 
 ## Caveats
 

@@ -196,7 +196,12 @@ int run(int argc, char** argv) {
     int forceJoint = -1;
     float forceDrive = 0.0f;
     float corrVel = -1.0f;
-    bool useSensory = true;
+    // Off by default. The loop is implemented and measurable, but it
+    // degrades everything it touches: with it on the giant fibre stops
+    // jumping and a Kenyon cell starts moving the fly, which inverts the
+    // specificity result the rest of the project rests on. Opt in with
+    // --sensory to study it; see the README for why it does not work yet.
+    bool useSensory = false;
     float extraLoad = 0.0f;
     float sensoryDrive = -1.0f;
 
@@ -228,6 +233,7 @@ int run(int argc, char** argv) {
         }
         else if (a == "--force-drive") forceDrive = std::stof(next("--force-drive"));
         else if (a == "--corr") corrVel = std::stof(next("--corr"));
+        else if (a == "--sensory") useSensory = true;
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
         else if (a == "--sensory-drive") sensoryDrive = std::stof(next("--sensory-drive"));
