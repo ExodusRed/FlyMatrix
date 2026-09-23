@@ -100,6 +100,31 @@ public:
         // hard in opposite directions.
         int forceLeg = -1;  // -1 drives every leg
 
+        // Drive supplied from outside, per leg and per joint, used when
+        // useManualDrive is set. This is how the gait test feeds a hand-built
+        // pattern to the body without going through the nervous system.
+        //
+        // A pattern injected here is NOT connectome-driven walking and must
+        // never be reported as such. Its purpose is to answer a question the
+        // nervous system cannot be blamed for: given a correct gait signal,
+        // can this body walk at all? If it cannot, no amount of work on the
+        // network will produce walking, and that is worth knowing first.
+        bool useManualDrive = false;
+        float manualDrive[kLegCount][kJointCount] = {};
+
+        // Target joint angles, radians, offset from the rest pose, used when
+        // useManualTarget is set. The posture servo keeps its full torque
+        // budget and drives the joint to the commanded angle.
+        //
+        // This is position control, which applyDrive deliberately does not
+        // give the neural path: there, drive is feed-forward torque and it
+        // *reduces* the postural hold, so a large command means a hard shove
+        // with a weak servo. That is right for a jump and useless for placing
+        // a foot, which is what a step is. Commanding angles here separates
+        // "can the body walk" from "can a torque-only controller walk it".
+        bool useManualTarget = false;
+        float manualTarget[kLegCount][kJointCount] = {};
+
         float substepHz = 8000.0f;  // physics steps per simulated second
     };
 

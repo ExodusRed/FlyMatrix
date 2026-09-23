@@ -214,6 +214,93 @@ int traceOne(const std::string& jointName_, float drive) {
 
 }  // namespace
 
+// Can this body walk if something hands it a correct gait?
+//
+// This imposes a tripod pattern by hand. It is NOT connectome-driven walking
+// and must never be reported as such -- no neuron is involved and the rhythm
+// comes from a sine wave. Its purpose is to separate two failures that look
+// identical from outside: a body that cannot walk however it is driven, and a
+// nervous system that is not producing a gait. Until the first is ruled out,
+// work on the second is unfalsifiable.
+//
+// The pattern is the textbook alternating tripod: front-left, middle-right and
+// hind-left swing together while the other three are in stance. Within a leg,
+// ThC retracts through stance to push the body forward, and during swing CTr
+// lifts the foot clear while ThC protracts to reset it.
+int gaitTest(float periodMs, float amplitude) {
+    FlyBody skeleton;
+    FlyPhysics phys;
+    if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
+    if (g_substep > 0.0f) phys.params.substepHz = g_substep;
+    phys.params.useManualTarget = true;
+    phys.build(skeleton);
+    if (g_iters > 0) phys.world.params.iterations = g_iters;
+
+    // Tripod A = front_L, middle_R, hind_L; tripod B is the other three.
+    const bool tripodA[kLegCount] = {true, false, false, true, true, false};
+
+    const float startX = phys.thorax().position.x;
+    const float startZ = phys.bodyHeight();
+    std::printf("=== gait: imposed tripod, NOT driven by the connectome ===\n");
+    std::printf("period %.0f ms (%.1f Hz), amplitude %.1f\n\n",
+                periodMs, 1000.0f / periodMs, amplitude);
+    std::printf("%8s %10s %10s %9s %9s\n",
+                "t (ms)", "x (mm)", "height", "contacts", "pitch");
+
+    const int n = static_cast<int>(2000.0f / 1000.0f / kDt);
+    float worstPitch = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        const float t = i * kDt * 1000.0f;
+        const float phase = 6.2831853f * t / periodMs;
+        for (int l = 0; l < kLegCount; ++l) {
+            const float p = tripodA[l] ? phase : phase + 3.14159265f;
+            const float s = std::sin(p);
+            const float c = std::cos(p);
+            // Retract through stance, protract through swing. `amplitude` is
+            // now the ThC swing in radians -- a real fly's coxa swings on the
+            // order of 0.3 rad -- rather than an abstract drive number.
+            phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] = -amplitude * s;
+            // Lift only during swing, which is the half where the leg is
+            // protracting. A leg that lifts during stance just drops the body.
+            //
+            // Positive CTr folds the leg and lifts the foot. Negative extends
+            // it downward, which is the direction that raises the *body* --
+            // flyphys test 2 reports CTr -15 as LIFTS, and taking that to mean
+            // "lift the foot" drove every swing leg into the floor, so all six
+            // feet stayed planted and the fly shuffled backwards.
+            phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
+                (c > 0.0f) ? amplitude * 0.6f * c : 0.0f;
+        }
+        phys.step(kDt);
+        const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
+        const float pitch = std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f;
+        worstPitch = std::max(worstPitch, std::fabs(pitch));
+        if (!std::isfinite(phys.bodyHeight())) {
+            std::printf("DIVERGED at %.0f ms\n", t);
+            return 2;
+        }
+        if (i % (n / 10) == 0 || i == n - 1) {
+            std::printf("%8.0f %10.4f %10.4f %9zu %9.2f\n",
+                        t, phys.thorax().position.x - startX, phys.bodyHeight(),
+                        phys.world.contacts.size(), pitch);
+        }
+    }
+
+    const float travel = phys.thorax().position.x - startX;
+    const float held = phys.bodyHeight();
+    std::printf("\ntravelled %+.3f mm in 2.0 s (%.2f mm/s), height %.3f -> %.3f, "
+                "worst pitch %.1f deg\n",
+                travel, travel / 2.0f, startZ, held, worstPitch);
+    // A walking fly does a few body lengths a second; 1 mm/s is slow but it is
+    // locomotion rather than twitching in place.
+    const bool moved = std::fabs(travel) > 1.0f;
+    const bool upright = held > 0.40f && worstPitch < 25.0f;
+    std::printf("  -> %s\n", (moved && upright)
+        ? "the body can walk when driven correctly"
+        : (!moved ? "no net travel" : "travelled but did not stay upright"));
+    return (moved && upright) ? 0 : 2;
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc - 1; ++i) {
         if (std::strcmp(argv[i], "--posture") == 0) {
@@ -250,6 +337,14 @@ int main(int argc, char** argv) {
     if (argc >= 3 && std::strcmp(argv[1], "--trace") == 0) {
         const float drive = (argc >= 4) ? std::stof(argv[3]) : 15.0f;
         return traceOne(argv[2], drive);
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--gait") == 0) {
+            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 60.0f;
+            // Radians of ThC swing, not an abstract drive number.
+            const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.3f;
+            return gaitTest(periodMs, amp);
+        }
     }
 
     std::printf("=== 1. does the body stand on its own? ===\n");

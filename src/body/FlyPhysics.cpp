@@ -186,8 +186,16 @@ void FlyPhysics::step(float dtSeconds) {
             HingeJoint& hj = world.joints[jointIndex_[l][j]];
             const bool legSelected =
                 (params.forceLeg < 0 || params.forceLeg == l);
-            const float d = (params.forceJoint == j && legSelected)
-                                ? params.forceDrive : 0.0f;
+            float d = (params.forceJoint == j && legSelected)
+                          ? params.forceDrive : 0.0f;
+            if (params.useManualDrive) d = params.manualDrive[l][j];
+            if (params.useManualTarget) {
+                hj.targetAngle = restAngle_[l][j] + params.manualTarget[l][j];
+                hj.maxTorque = params.postureTorque;
+                hj.servoRate = params.servoRate;
+                hj.muscleTorque = 0.0f;
+                continue;
+            }
             applyDrive(hj, restAngle_[l][j], d);
         }
     }

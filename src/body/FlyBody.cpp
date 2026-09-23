@@ -120,7 +120,12 @@ FlyBody::FlyBody() {
         // FTi in opposite directions. That is why the six legs disagreed about
         // which way a joint lifts (flyphys test 3), and why one "extend"
         // command extended some legs and flexed others.
-        leg.joints[0] = {kLeft, L.rest[0], -0.9f, 0.9f, kCoxaLen * s, 0.045f};
+        // Range wide enough to swing both ways from every leg's rest angle.
+        // At +/-0.9 the front legs, resting at -0.841, had 0.06 rad of
+        // protraction left against 1.74 of retraction: they could only ever
+        // drag backwards, which is what pitched the body during the gait
+        // test.
+        leg.joints[0] = {kLeft, L.rest[0], -1.6f, 1.6f, kCoxaLen * s, 0.045f};
         // CTr depresses: it swings the femur down within the leg's own plane,
         // about the local lateral axis. This is the joint the tergotrochanteral
         // jump muscle acts on, and it is the joint that levers the body off the
