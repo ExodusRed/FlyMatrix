@@ -205,6 +205,9 @@ int run(int argc, char** argv) {
     // --sensory to study it; see the README for why it does not work yet.
     bool useSensory = false;
     float extraLoad = 0.0f;
+    // Print the per-leg drive on one joint each sample, so a gait
+    // pattern (or its absence) is visible directly.
+    std::string probeJoint;
     float sensoryDrive = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
@@ -239,6 +242,7 @@ int run(int argc, char** argv) {
         }
         else if (a == "--force-drive") forceDrive = std::stof(next("--force-drive"));
         else if (a == "--corr") corrVel = std::stof(next("--corr"));
+        else if (a == "--probe-joint") probeJoint = next("--probe-joint");
         else if (a == "--sensory") useSensory = true;
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
@@ -349,9 +353,25 @@ int run(int argc, char** argv) {
         // zero the antagonists are firing together and cancelling, which
         // looks identical to "the muscle is working" in the activation
         // column alone.
-        std::printf("%8s %10s %10s %9s %9s %9s %9s\n",
-                    "t (ms)", "height", "peak", "contacts", "CTr act",
-                    "CTr drv", "spikes");
+        int probeIdx = -1;
+        for (int j = 0; j < kJointCount; ++j) {
+            if (probeJoint == jointName(static_cast<Joint>(j))) probeIdx = j;
+        }
+        if (probeIdx >= 0) {
+            // Per-leg drive on one joint. A gait is visible here or nowhere:
+            // the six columns should alternate in a tripod pattern, with
+            // front_L, middle_R and hind_L moving together and against the
+            // other three.
+            std::printf("%8s %10s %9s", "t (ms)", "height", "spikes");
+            for (int l = 0; l < kLegCount; ++l) {
+                std::printf(" %9s", legName(static_cast<LegId>(l)));
+            }
+            std::printf("\n");
+        } else {
+            std::printf("%8s %10s %10s %9s %9s %9s %9s\n",
+                        "t (ms)", "height", "peak", "contacts", "CTr act",
+                        "CTr drv", "spikes");
+        }
         for (int i = 0; i < n; ++i) {
             // Spikes across this physics step's worth of neural steps. A
             // stimulus that has ended should show this decaying; if it does
@@ -394,10 +414,19 @@ int run(int argc, char** argv) {
                     const float d = pools.drive(l, static_cast<int>(Joint::CTr));
                     if (std::fabs(d) > std::fabs(ctrDrive)) ctrDrive = d;
                 }
-                std::printf("%8.0f %10.4f %10.4f %9zu %9.3f %9.3f %9u\n",
-                            i * physDt * 1000.0f, phys.bodyHeight(),
-                            phys.peakHeight(), phys.world.contacts.size(), ctr,
-                            ctrDrive, spikesThisMs);
+                if (probeIdx >= 0) {
+                    std::printf("%8.0f %10.4f %9u", i * physDt * 1000.0f,
+                                phys.bodyHeight(), spikesThisMs);
+                    for (int l = 0; l < kLegCount; ++l) {
+                        std::printf(" %+9.3f", pools.drive(l, probeIdx));
+                    }
+                    std::printf("\n");
+                } else {
+                    std::printf("%8.0f %10.4f %10.4f %9zu %9.3f %9.3f %9u\n",
+                                i * physDt * 1000.0f, phys.bodyHeight(),
+                                phys.peakHeight(), phys.world.contacts.size(),
+                                ctr, ctrDrive, spikesThisMs);
+                }
             }
             if (!std::isfinite(phys.bodyHeight()) ||
                 std::fabs(phys.bodyHeight()) > 1e4f) {

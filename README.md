@@ -467,10 +467,87 @@ floor and made broad activation stronger -- see
 - **Sustained maximal drive drifts.** Past about a second of continuous
   activation the body creeps upward. A real escape is a brief burst, and the
   neural model's endless firing is the unphysical part, but a solver should
-  not drift regardless.
+  not drift regardless. Much of this turned out to be the joint-limit
+  constraint re-applying its full impulse on every one of 64 solver
+  iterations -- see findings 6 -- which is fixed; what remains is untested.
 - **Landing tunnels.** Coming down fast the trunk can pass through the floor;
   contacts are point probes with no swept test.
 - **Slow.** 64 iterations at an 8 kHz substep is far from real time.
+
+## Walking
+
+```sh
+flyphys --gait                 # imposed tripod, mechanics only
+flyphys --gait 60 0.3          # period in ms, ThC swing in radians
+flybody --drop 400 --stim-type MDN --pulse 0 --probe-joint ThC
+python tools/cpg_probe.py --joint ThC --leg middle_L
+```
+
+The body walks:
+
+```
+travelled +7.480 mm in 2.0 s (3.74 mm/s)
+height 0.620 -> 0.594 mm, worst pitch 9.0 deg, 5-6 feet down
+```
+
+Travel is linear to three figures across the whole two seconds, so this is
+steady locomotion rather than a fall dressed up as progress. A real fly does
+10-25 mm/s, so it is about four times slow, at a physiological 16.7 Hz step
+frequency and a 0.3 rad coxa swing.
+
+**The rhythm is a sine wave, not a neuron.** `--gait` imposes an alternating
+tripod by hand. It exists to answer a question that had to come first: given a
+correct gait signal, can this body walk at all? While that was unknown, any
+failure of the nervous system to walk was unfalsifiable, because the body might
+not have been able to walk however it was driven. It is not a claim that
+connectome-driven walking works, and the harness prints the caveat itself.
+
+It also relies on position control -- `useManualTarget` commands joint angles
+with the posture servo at full budget. The neural path does not get that:
+`applyDrive` gives it feed-forward torque and *reduces* the postural hold in
+proportion to drive, which is right for a jump and useless for placing a foot.
+A torque-only controller walking is a strictly harder problem than this result.
+
+### What made it possible
+
+ThC used to hinge about the fore-aft axis, so it abducted the leg sideways and
+no joint could propel the body. The dataset is unambiguous that this is wrong:
+the ThC motor neurons are named promotor and remotor -- 62 of them, whose job
+is swinging the leg fore and aft. ThC is now the lateral-axis swing and splay
+is a fixed mount rotation, which is what it is in the animal.
+
+That defect had spread. With no fore-aft joint, the rest-pose solver reached
+forward with the front legs and backward with the hind legs by folding CTr and
+FTi opposite ways, and `MotorPools` applies one sign per joint to all six legs
+-- so one "extend" command extended some legs and flexed others. `flyphys`
+test 3 measures it: the six legs disagreed on 5 of 10 joint/direction rows
+before, 1 of 10 after.
+
+Full account in [docs/findings.md](docs/findings.md), sections 6 to 9.
+
+### What the nervous system does and does not do
+
+MDN, the moonwalker descending neuron, is in this dataset. Driving it produces
+a real, specific, segmentally organised motor command -- front legs retract,
+hind legs protract, sustained without saturating -- against a clean control:
+Kenyon cells produce exactly zero drive on all six legs.
+
+It is entirely non-rhythmic. The pattern settles into a fixed posture and never
+alternates.
+
+`tools/cpg_probe.py` asks the wiring whether the usual source of a rhythm is
+present: two premotor populations that inhibit each other. Per leg, the mutual
+connection between ThC protractor-favouring and retractor-favouring premotor
+cells is 58-61% excitatory against a 61% network baseline -- indistinguishable
+from chance. That is a limit of the method rather than evidence the fly lacks a
+rhythm generator: the premotor layer is 370-420 densely interconnected cells
+per leg, and a half centre built from a handful of identified interneurons
+would be invisible inside it.
+
+So walking now decomposes cleanly. The mechanics work, the command layer works,
+and what is missing is specifically a rhythm -- which will not fall out of
+tonic drive through this premotor layer as wired, and which anything we add to
+supply has to be labelled as a modelling choice.
 
 ## Closing the sensorimotor loop
 
