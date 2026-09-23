@@ -354,7 +354,7 @@ friction. Muscle activation becomes joint torque, so the body decides what
 happens.
 
     stands   0.578 mm on six feet, level to within 1 degree, no drift to 1 s
-    jumps    3.75 mm peak when the giant fibre fires
+    jumps    4.96 mm peak when the giant fibre fires
 
 A real *Drosophila* takes off at around 0.3 m/s, about 4.6 mm ballistic, so
 the jump is the right order of magnitude.
@@ -431,10 +431,10 @@ cell type like DNp01 amounts to -- the answer is yes:
 | stimulus | neurons | peak |
 |----------|--------:|-----:|
 | MBON01, APL, KC | 2 each | 0.62 mm, no jump |
-| DNp04 (descending) | 2 | 0.93 mm |
-| **DNp01, the giant fibre** | **1** | **3.75 mm** |
-| DNp03 (descending) | 2 | 3.19 mm |
-| DNp09 (descending) | 2 | 24.8 mm |
+| DNp04 (descending) | 2 | 0.62 mm |
+| **DNp01, the giant fibre** | **1** | **4.96 mm** |
+| DNp03 (descending) | 2 | 0.62 mm |
+| DNp09 (descending) | 2 | 63.0 mm |
 
 Descending neurons, which are the cells that carry motor commands from brain
 to nerve cord, move the fly. Mushroom body output neurons, Kenyon cells and
@@ -455,8 +455,11 @@ optic lobe cell is not a negative control at all. Matching the stimulus size
 and picking populations with no route to leg motor neurons gave the opposite
 result.
 
-DNp09 reaching 24.8 mm from two neurons is not right either. It is a
-descending neuron so movement is expected, but the magnitude is not.
+DNp09 reaching 63 mm from two neurons is not right. It is a descending
+neuron so movement is expected, but not that. Muscle strengths now come
+from measured motor neuron size rather than a table, which raised the
+floor and made broad activation stronger -- see
+[docs/findings.md](docs/findings.md).
 
 ### What does not work yet
 

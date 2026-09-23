@@ -97,6 +97,7 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
     // Key is leg/joint/direction/muscle, so the same muscle on a different leg
     // stays a separate entry with its own activation.
     std::unordered_map<std::string, std::uint16_t> lookup;
+    std::vector<double> allSizes;
 
     std::string line;
     std::getline(f, line);  // header
@@ -107,12 +108,14 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
         if (line.empty()) continue;
 
         std::istringstream ss(line);
-        std::string leg, joint, dir, idxStr, type;
+        std::string leg, joint, dir, idxStr, type, sizeStr;
         if (!std::getline(ss, leg, '\t') || !std::getline(ss, joint, '\t') ||
-            !std::getline(ss, dir, '\t') || !std::getline(ss, idxStr, '\t')) {
+            !std::getline(ss, dir, '\t') || !std::getline(ss, idxStr, '\t') ||
+            !std::getline(ss, type, '\t')) {
             continue;
         }
-        std::getline(ss, type);
+        std::getline(ss, sizeStr);
+        const double neuronSize = sizeStr.empty() ? 0.0 : std::stod(sizeStr);
 
         const int l = legIndex(leg), j = jointIndex(joint), d = directionIndex(dir);
         if (l < 0 || j < 0 || d < 0) continue;
@@ -136,11 +139,34 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
 
         const auto idx = static_cast<std::uint32_t>(std::stoul(idxStr));
         mp.muscles_[it->second].neurons.push_back(idx);
+        mp.muscles_[it->second].totalSize += neuronSize;
+        allSizes.push_back(neuronSize);
         maxIdx = std::max(maxIdx, idx);
         ++rows;
     }
 
     if (rows == 0) throw std::runtime_error(tsvPath + " contained no usable rows");
+
+    // Muscle strength from measured motor neuron size rather than a hand table.
+    //
+    // Drosophila leg motor neurons follow a size principle: force per spike
+    // spans roughly a hundredfold from small slow units to large fast ones
+    // (Azevedo et al. 2020). A muscle's force capacity is the sum over its
+    // motor units, and activation here is already a mean rate across them, so
+    // summed size is the right quantity. Expressed in units of the median
+    // single leg motor neuron, which puts a typical postural muscle near 1.
+    if (params.strengthFromSize && !allSizes.empty()) {
+        std::vector<double> sorted = allSizes;
+        std::sort(sorted.begin(), sorted.end());
+        const double median = sorted[sorted.size() / 2];
+        if (median > 0.0) {
+            for (auto& m : mp.muscles_) {
+                if (m.totalSize > 0.0) {
+                    m.strength = static_cast<float>(m.totalSize / median);
+                }
+            }
+        }
+    }
 
     mp.muscleOf_.assign(static_cast<std::size_t>(maxIdx) + 1, 0u);
     for (std::size_t m = 0; m < mp.muscles_.size(); ++m) {

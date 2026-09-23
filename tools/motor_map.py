@@ -94,6 +94,12 @@ def main() -> None:
     supers = nz["superclass"]
     neuromere = nz["neuromere"]
     side = nz["soma_side"]
+    # Segmentation volume. Drosophila leg motor neurons follow a size
+    # principle: small ones are slow and tonic and hold posture, large
+    # ones are fast and produce far more force per spike (Azevedo et al.
+    # 2020). Carrying it through lets muscle strength be measured rather
+    # than hand-assigned.
+    sizes = nz["size"]
 
     motor = np.flatnonzero(supers == "vnc_motor")
     print(f"{len(motor)} vnc_motor neurons")
@@ -114,13 +120,15 @@ def main() -> None:
             no_leg += 1
             continue
         joint, direction = jd
-        rows.append((f"{leg_seg}_{s}", joint, direction, int(i), str(types[i])))
+        rows.append((f"{leg_seg}_{s}", joint, direction, int(i), str(types[i]),
+                     int(sizes[i])))
 
     tab, nl = chr(9), chr(10)
     BIN.mkdir(parents=True, exist_ok=True)
     out = BIN / "motor_map.tsv"
     with open(out, "w", encoding="utf-8", newline=nl) as f:
-        f.write(tab.join(["leg", "joint", "direction", "neuron_index", "type"]) + nl)
+        f.write(tab.join(["leg", "joint", "direction", "neuron_index",
+                          "type", "size"]) + nl)
         for r in sorted(rows):
             f.write(tab.join(str(x) for x in r) + nl)
 

@@ -36,6 +36,9 @@ public:
         // way to the others, so proportional excursion made it swing eight
         // times further than the front knee for identical drive.
         float excursionRad = 0.7f;
+        // Derive each muscle's strength from the summed size of its motor
+        // neurons instead of the hand-written profile table.
+        bool strengthFromSize = true;
     };
 
     struct Muscle {
@@ -47,6 +50,8 @@ public:
         float tauMs = 30.0f;
         // Torque at full activation, relative to a postural muscle.
         float strength = 1.0f;
+        // Summed segmentation volume of this muscle's motor neurons.
+        double totalSize = 0.0;
         float activation = 0.0f;
         std::uint32_t spikes = 0;
     };

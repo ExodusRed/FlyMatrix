@@ -43,10 +43,17 @@ public:
         // torques of order 1e6 just to hold the animal up. Values that look
         // reasonable as bare numbers are three orders of magnitude too small
         // and the legs simply fold.
-        // Calibrated so the giant fibre produces a 3.1 mm jump from a
-        // 0.58 mm stance. A real Drosophila takes off at roughly 0.3 m/s,
-        // which is about 4.6 mm ballistic, so this is the right order.
-        float maxMuscleTorque = 3.0e5f;    // ug*mm^2/s^2
+        // The one remaining free parameter in the muscle model: it converts
+        // a motor neuron's segmentation volume into torque, and nothing
+        // measures that conversion. Relative strengths between muscles are
+        // no longer tuned -- they come from measured neuron size -- but the
+        // overall scale still has to be set.
+        //
+        // At this value the giant fibre produces a 4.96 mm jump from a
+        // 0.58 mm stance, against roughly 4.6 mm ballistic for a real
+        // Drosophila taking off at 0.3 m/s. The usable window is narrow and
+        // not monotonic: 4e5 and 6e5 both diverge sooner than this does.
+        float maxMuscleTorque = 5.0e5f;    // ug*mm^2/s^2
         // Torque budget a joint can spend holding its posture. This is a
         // bound on an impulse, not a spring gain, so it can be raised freely
         // without threatening the integrator.

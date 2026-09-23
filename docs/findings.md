@@ -158,10 +158,8 @@ engineering task someone has already completed.
 Ordered by what the evidence now supports, which is not the order we guessed
 before doing the reading:
 
-1. **Derive muscle strength from motor neuron size.** Directly supported, the
-   data is already downloaded, and it replaces a tuned table with a measured
-   quantity. Our size range (70x) and the literature's force range (~100x)
-   agree, and TTMn landing at the top is independent confirmation.
+1. ~~**Derive muscle strength from motor neuron size.**~~ **Done — see below.**
+   It works, and it is not uniformly an improvement.
 2. **Give the network tonic drive.** Until slow motor neurons fire at rest
    there is no baseline to modulate and `postureTorque` is doing the nervous
    system's job. Neuromodulation is the biologically honest source and we
@@ -193,3 +191,65 @@ before doing the reading:
 [feco-wiki]: https://en.wikipedia.org/wiki/Femoral_chordotonal_organ
 [bassler]: https://journals.biologists.com/jeb/article/91/1/179/22868/Effects-of-Afference-Sign-Reversal-on-Motor
 [skorupski]: https://link.springer.com/chapter/10.1007/978-1-4615-1985-0_18
+
+---
+
+## 5. What happened when we acted on finding 3
+
+Muscle strength now comes from the summed segmentation volume of a muscle's
+motor neurons, in units of the median single leg motor neuron, replacing a
+hand-written table. The result is instructive and only partly good.
+
+### The jump got closer to the real animal
+
+    giant fibre jump   3.75 mm  ->  4.96 mm      (real takeoff ~4.6 mm ballistic)
+
+and the non-motor controls stayed perfectly silent at 0.62 mm: MBON01, Kenyon
+cells, APL. Specificity survived the change intact.
+
+### But it redistributed force, and not only for the better
+
+| neuron | hand table | from size |
+|--------|-----------:|----------:|
+| DNp01, giant fibre | 3.75 mm | **4.96 mm** |
+| DNp03 | 3.19 mm | 0.62 mm |
+| DNp04 | 0.93 mm | 0.62 mm |
+| DNp09 | 24.8 mm | **63.0 mm** |
+
+DNp09 was already wrong and is now much more wrong. Two descending neurons
+stopped moving the fly at all.
+
+The mechanism is visible in the strength distributions:
+
+```
+hand table   median 1.00   max 22.0     one special muscle over a flat floor
+from size    median 3.61   max 11.6     many comparably strong muscles
+```
+
+The table I wrote encoded a belief -- that the jump muscle towers over
+everything else. The data says the fly has many substantial leg muscles and
+the tergotrochanteral one is not an outlier in *force*. Per neuron TTMn is the
+largest cell in the dataset, but a muscle's force is the sum over its motor
+units, and the tibia flexor has many. What makes the jump special is speed and
+the catapult mechanism, neither of which is force.
+
+Raising the floor 3.6x is why broad activation got worse. DNp09 reaching 63 mm
+is the same failure the README already records under supraphysiological drive,
+amplified: nothing in this model prevents every muscle contracting maximally
+at once, and now every muscle is strong.
+
+### Kept anyway
+
+The measured version ships, because the alternative is a table of numbers I
+invented. Replacing invention with measurement is worth a worse DNp09, and it
+makes the next problem legible rather than hidden: the model needs something
+that stops simultaneous maximal activation of everything. In a real animal
+that is reciprocal inhibition and recruitment order -- the size principle
+again, which says small units fire first and large ones only under strong
+drive. Our muscles have no recruitment order at all: every motor unit in a
+muscle shares one activation.
+
+One free parameter remains, `maxMuscleTorque`, which converts segmentation
+volume into torque. Nothing measures that conversion. Its usable window is
+narrow and not monotonic -- 4e5 and 6e5 both diverge sooner than the 5e5 we
+ship -- which is a real weakness and not a tuned success.
