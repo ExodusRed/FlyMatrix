@@ -605,14 +605,21 @@ int run(int argc, char** argv) {
     // claim the whole bridge rests on: that driving a named motor pool moves
     // the joint that pool is named after, on the leg it belongs to.
     if (frameLimit > 0) {
-        std::printf("\n%-10s %-6s %-22s %8s %8s\n",
-                    "leg", "joint", "muscle", "activ", "torque");
+        // "recruited" counts units above a tenth activation, which is what
+        // makes recruitment order visible: a muscle can be producing a little
+        // force with two small units or a lot with all of them.
+        std::printf("\n%-10s %-6s %-22s %8s %9s %8s\n",
+                    "leg", "joint", "muscle", "peak", "recruited", "force");
         for (const auto& m : pools.muscles()) {
-            if (m.activation < 0.01f) continue;
-            std::printf("%-10s %-6s %-22s %8.3f %8.2f\n",
+            if (m.force() < 0.02f) continue;
+            int recruited = 0;
+            for (const auto& u : m.units) {
+                if (u.activation > 0.1f) ++recruited;
+            }
+            std::printf("%-10s %-6s %-22s %8.3f %4d/%-4zu %8.2f\n",
                         legName(static_cast<LegId>(m.leg)),
                         jointName(static_cast<Joint>(m.joint)), m.name.c_str(),
-                        m.activation, m.activation * m.strength);
+                        m.peakActivation(), recruited, m.units.size(), m.force());
         }
     }
 

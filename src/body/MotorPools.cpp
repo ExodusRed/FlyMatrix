@@ -130,7 +130,6 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
             m.joint = j;
             m.dir = d;
             m.tauMs = prof.tauMs;
-            m.strength = prof.strength;
             const auto id = static_cast<std::uint16_t>(mp.muscles_.size());
             mp.muscles_.push_back(std::move(m));
             mp.index_[l][j][d].push_back(id);
@@ -138,8 +137,11 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
         }
 
         const auto idx = static_cast<std::uint32_t>(std::stoul(idxStr));
-        mp.muscles_[it->second].neurons.push_back(idx);
-        mp.muscles_[it->second].totalSize += neuronSize;
+        MotorUnit u;
+        u.neuron = idx;
+        // sizeRel is filled in once the median is known, below.
+        u.sizeRel = static_cast<float>(neuronSize);
+        mp.muscles_[it->second].units.push_back(u);
         allSizes.push_back(neuronSize);
         maxIdx = std::max(maxIdx, idx);
         ++rows;
@@ -147,31 +149,33 @@ MotorPools MotorPools::load(const std::string& tsvPath, Params params) {
 
     if (rows == 0) throw std::runtime_error(tsvPath + " contained no usable rows");
 
-    // Muscle strength from measured motor neuron size rather than a hand table.
+    // Force per motor unit from its measured size.
     //
     // Drosophila leg motor neurons follow a size principle: force per spike
     // spans roughly a hundredfold from small slow units to large fast ones
-    // (Azevedo et al. 2020). A muscle's force capacity is the sum over its
-    // motor units, and activation here is already a mean rate across them, so
-    // summed size is the right quantity. Expressed in units of the median
-    // single leg motor neuron, which puts a typical postural muscle near 1.
-    if (params.strengthFromSize && !allSizes.empty()) {
+    // (Azevedo et al. 2020). Expressed in units of the median single leg motor
+    // neuron, so a typical unit sits near 1 and the jump muscle's unit, the
+    // largest cell in the dataset, sits near 9.
+    {
         std::vector<double> sorted = allSizes;
         std::sort(sorted.begin(), sorted.end());
-        const double median = sorted[sorted.size() / 2];
-        if (median > 0.0) {
-            for (auto& m : mp.muscles_) {
-                if (m.totalSize > 0.0) {
-                    m.strength = static_cast<float>(m.totalSize / median);
-                }
+        const double median = sorted.empty() ? 1.0 : sorted[sorted.size() / 2];
+        for (auto& m : mp.muscles_) {
+            for (auto& u : m.units) {
+                u.sizeRel = (params.strengthFromSize && median > 0.0 && u.sizeRel > 0.0f)
+                                ? static_cast<float>(u.sizeRel / median)
+                                : 1.0f;
             }
         }
     }
 
     mp.muscleOf_.assign(static_cast<std::size_t>(maxIdx) + 1, 0u);
+    mp.unitOf_.assign(static_cast<std::size_t>(maxIdx) + 1, 0u);
     for (std::size_t m = 0; m < mp.muscles_.size(); ++m) {
-        for (const auto n : mp.muscles_[m].neurons) {
+        for (std::size_t u = 0; u < mp.muscles_[m].units.size(); ++u) {
+            const auto n = mp.muscles_[m].units[u].neuron;
             mp.muscleOf_[n] = static_cast<std::uint16_t>(m + 1);
+            mp.unitOf_[n] = static_cast<std::uint16_t>(u);
         }
     }
     mp.mapped_ = rows;
@@ -184,8 +188,10 @@ bool MotorPools::isMotorNeuron(std::uint32_t idx) const {
 
 void MotorPools::reset() {
     for (auto& m : muscles_) {
-        m.activation = 0.0f;
-        m.spikes = 0;
+        for (auto& u : m.units) {
+            u.activation = 0.0f;
+            u.spikes = 0;
+        }
     }
 }
 
@@ -195,34 +201,28 @@ void MotorPools::accumulate(const LIFNetwork& net) {
     for (const auto s : net.lastSpikes()) {
         if (s >= muscleOf_.size()) continue;
         const std::uint16_t packed = muscleOf_[s];
-        if (packed != 0u) ++muscles_[packed - 1].spikes;
+        if (packed != 0u) ++muscles_[packed - 1].units[unitOf_[s]].spikes;
     }
 }
 
 void MotorPools::update(float dtMs) {
     if (dtMs <= 0.0f) return;
     for (auto& m : muscles_) {
-        if (m.neurons.empty()) {
-            m.spikes = 0;
-            continue;
-        }
-        // Activation is a leaky integrator driven by spikes, not a low-pass
-        // filter applied to a windowed rate estimate.
-        //
-        // The difference matters for a fast muscle. Measuring "spikes in the
-        // last millisecond" is mostly measuring zero: the jump muscle fires
-        // around 140 Hz, one spike every 7 ms, so nearly every window is
-        // empty and a 4 ms filter decays to nothing in between. Integrating
-        // spikes directly summates them the way real muscle force does, and
-        // the steady-state activation works out to rate / rateForFullActivation
-        // regardless of how long the step is.
+        // Each motor unit integrates its own spikes. A leaky integrator, not a
+        // filter over a windowed rate estimate: measuring "spikes in the last
+        // millisecond" is mostly measuring zero, since a unit firing at 140 Hz
+        // spikes once every 7 ms and nearly every window is empty. Integrating
+        // summates them the way muscle force does, and steady-state activation
+        // works out to rate / rateForFullActivation whatever the step size.
         const float tauSec = m.tauMs * 0.001f;
-        const float perSpike = 1.0f / (static_cast<float>(m.neurons.size()) *
-                                       p_.rateForFullActivation * tauSec);
-        m.activation *= std::exp(-dtMs / m.tauMs);
-        m.activation += static_cast<float>(m.spikes) * perSpike;
-        m.activation = std::min(m.activation, 1.0f);
-        m.spikes = 0;
+        const float perSpike = 1.0f / (p_.rateForFullActivation * tauSec);
+        const float decay = std::exp(-dtMs / m.tauMs);
+        for (auto& u : m.units) {
+            u.activation *= decay;
+            u.activation += static_cast<float>(u.spikes) * perSpike;
+            u.activation = std::min(u.activation, 1.0f);
+            u.spikes = 0;
+        }
     }
 }
 
@@ -230,9 +230,11 @@ float MotorPools::drive(int leg, int joint) const {
     float sum = 0.0f;
     for (int d = 0; d < 2; ++d) {
         float side = 0.0f;
-        for (const auto id : index_[leg][joint][d]) {
-            side += muscles_[id].activation * muscles_[id].strength;
-        }
+        // Force is summed over motor units, each weighted by its own size, so
+        // a muscle with only its small units firing produces proportionally
+        // little. That recruitment order is the whole point: averaging over a
+        // muscle made every unit fire together.
+        for (const auto id : index_[leg][joint][d]) side += muscles_[id].force();
         sum += (d == 1) ? side : -side;
     }
     return sum * kJointDriveSign[joint];
@@ -242,7 +244,7 @@ float MotorPools::peakActivation(int leg, int joint) const {
     float best = 0.0f;
     for (int d = 0; d < 2; ++d) {
         for (const auto id : index_[leg][joint][d]) {
-            best = std::max(best, muscles_[id].activation);
+            best = std::max(best, muscles_[id].peakActivation());
         }
     }
     return best;

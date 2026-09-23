@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -36,26 +37,56 @@ public:
         // way to the others, so proportional excursion made it swing eight
         // times further than the front knee for identical drive.
         float excursionRad = 0.7f;
-        // Derive each muscle's strength from the summed size of its motor
-        // neurons instead of the hand-written profile table.
+        // Derive each motor unit's force from its neuron's size instead of
+        // the hand-written profile table.
         bool strengthFromSize = true;
     };
 
-    struct Muscle {
-        std::string name;
-        std::vector<std::uint32_t> neurons;
-        int leg = 0, joint = 0, dir = 0;  // dir 0 = flex/retract
-        // Time constant of activation rise and fall. Postural muscles are
-        // slow; the jump muscle is fast-twitch.
-        float tauMs = 30.0f;
-        // Torque at full activation, relative to a postural muscle.
-        float strength = 1.0f;
-        // Summed segmentation volume of this muscle's motor neurons.
-        double totalSize = 0.0;
+    // One motor unit: a single motor neuron and the muscle fibres it drives.
+    //
+    // Each carries its own activation rather than sharing the muscle's. Real
+    // muscles recruit units in order of size -- small slow ones first, large
+    // fast ones only under strong drive (Azevedo et al. 2020) -- so force is
+    // graded by *which* units are firing, not just how fast. Averaging over a
+    // muscle erases that: it made every unit fire together, and with strengths
+    // derived from size that meant any broad activation produced maximal
+    // force everywhere at once.
+    struct MotorUnit {
+        std::uint32_t neuron = 0;
+        // This unit's force contribution, in units of the median leg motor
+        // neuron, taken from its segmentation volume.
+        float sizeRel = 1.0f;
         float activation = 0.0f;
         std::uint32_t spikes = 0;
     };
 
+    struct Muscle {
+        std::string name;
+        std::vector<MotorUnit> units;
+        int leg = 0, joint = 0, dir = 0;  // dir 0 = flex/retract
+        // Time constant of activation rise and fall. Postural muscles are
+        // slow; the jump muscle is fast-twitch.
+        float tauMs = 30.0f;
+
+        // Summed force this muscle can produce, all units fully active.
+        float maxForce() const {
+            float f = 0.0f;
+            for (const auto& u : units) f += u.sizeRel;
+            return f;
+        }
+        // Force it is producing now.
+        float force() const {
+            float f = 0.0f;
+            for (const auto& u : units) f += u.activation * u.sizeRel;
+            return f;
+        }
+        // Strongest single unit activation, for display.
+        float peakActivation() const {
+            float a = 0.0f;
+            for (const auto& u : units) a = std::max(a, u.activation);
+            return a;
+        }
+    };
     // Throws std::runtime_error if the map is missing or names no known joint.
     static MotorPools load(const std::string& tsvPath, Params params = {});
 
@@ -90,6 +121,9 @@ private:
     // Indexed by neuron: 0 for anything that is not a motor neuron, otherwise
     // 1 + the muscle index, so a spike maps to its muscle in one lookup.
     std::vector<std::uint16_t> muscleOf_;
+    // Which unit within that muscle, so a spike reaches its own
+    // motor unit rather than the muscle as a whole.
+    std::vector<std::uint16_t> unitOf_;
     std::size_t mapped_ = 0;
 };
 
