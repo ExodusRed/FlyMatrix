@@ -54,6 +54,17 @@ public:
         // Chordotonal organs are phasic as well as tonic: they respond to
         // movement, not only position. This weights the rate of change of leg
         // span against its absolute deviation.
+        //
+        // maxDrive below zero does NOT implement reflex reversal, though it
+        // looks as though it might. The drive is clamp(signal, 0, 1) *
+        // maxDrive, so a negative gain hyperpolarises the sensory neurons in
+        // proportion to compression -- and a neuron that is already silent
+        // cannot be silenced further, so nothing propagates. Measured: gains
+        // of -2, -10, -50 and -200 give bit-identical results, and identical
+        // to a gain of zero. A real reflex reversal happens downstream, in
+        // whether the sensory path is routed through an inhibitory
+        // interneuron, which is a property of the network and not of this
+        // gain. See docs/findings.md section 2.
         float velocityWeight = 0.35f;
     };
 

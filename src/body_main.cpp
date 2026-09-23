@@ -209,6 +209,12 @@ int run(int argc, char** argv) {
     // pattern (or its absence) is visible directly.
     std::string probeJoint;
     float sensoryDrive = -1.0f;
+    // Tracked separately because a *negative* gain is a meaningful
+    // setting, not an unset one: it inverts the reflex. Gating on
+    // sensoryDrive >= 0 silently ignored every negative value, so the
+    // inverted reflex looked identical to the default and the one free
+    // variable the connectome cannot supply was never actually tested.
+    bool sensoryDriveSet = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -246,7 +252,10 @@ int run(int argc, char** argv) {
         else if (a == "--sensory") useSensory = true;
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
-        else if (a == "--sensory-drive") sensoryDrive = std::stof(next("--sensory-drive"));
+        else if (a == "--sensory-drive") {
+            sensoryDrive = std::stof(next("--sensory-drive"));
+            sensoryDriveSet = true;
+        }
         else throw std::runtime_error("unknown option: " + a);
     }
 
@@ -260,7 +269,7 @@ int run(int argc, char** argv) {
     // The return half of the loop. Optional only so the difference it makes
     // can be measured against its absence.
     SensoryOrgans::Params sensoryParams;
-    if (sensoryDrive >= 0.0f) sensoryParams.maxDrive = sensoryDrive;
+    if (sensoryDriveSet) sensoryParams.maxDrive = sensoryDrive;
     SensoryOrgans sensory =
         SensoryOrgans::load(dataDir + "/sensory_map.tsv", sensoryParams);
     std::printf("proprioceptors: %zu chordotonal, %zu campaniform%s\n",
