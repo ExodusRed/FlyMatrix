@@ -741,3 +741,98 @@ specifically a rhythm, and we now know three things about it that we did not:
    enough.
 3. Anything we add to produce it is a modelling choice and has to be labelled
    as one, exactly like the reflex sign in finding 2.
+
+
+---
+
+## 10. The FeCO can be split by what it drives, and it is not enough
+
+Finding 1 said the sensorimotor loop fails because all 254 chordotonal neurons
+are driven with one signal, which excites extension-encoding and
+flexion-encoding cells together, and that we could not fix it because the
+subtype labels come from axon morphology and are not in this dataset.
+
+The labels turn out not to be what was needed.
+
+What the loop needs is to know which sensory cells belong on opposite sides of
+the signal. That is a question about what each cell *does* downstream, and it
+is recoverable from connectivity. `tools/feco_split.py` measures each
+chordotonal neuron's signed two-hop reach to the FTi flexor motor pool against
+its reach to the FTi extensor pool. FTi is the right joint: the femoral
+chordotonal organ encodes tibia position, which is the FTi angle.
+
+### The population is sharply bimodal
+
+For the left middle leg, 71 of 87 chordotonal neurons reach either pool within
+two hops:
+
+```
+bias toward extend (+1) against flex (-1)
+  -1.0..-0.9   24 ##############################
+  -0.9..-0.5    4 ####
+  -0.5..+0.0    3 ###
+  +0.0..+0.5    4 ####
+  +0.5..+0.9    4 ####
+  +0.9..+1.0   32 ########################################
+
+  |bias| > 0.5 : 64  (90%)
+  |bias| <= 0.2:  4  (6%)
+```
+
+A cell that reaches only one pool scores exactly +/-1 for free, which would
+manufacture bimodality out of sparse connectivity, so that was checked
+separately. Only 9 cells are in that position. Of the **62 that reach both
+pools**, 89% still favour one by a margin and 6% sit near the middle. The
+split is real.
+
+Across all six legs, 284 of 403 chordotonal neurons get an assignment: 156
+extensor-driving, 128 flexor-driving. Cells with |bias| < 0.2 are deliberately
+left unassigned rather than forced to a side, because a cell that drives both
+antagonists equally is precisely the confusion the split exists to remove.
+
+### Wired in, it helps substantially and does not fix the loop
+
+The two groups are now driven by opposite phases of tibia movement, from the
+FTi angle rather than whole-leg compression. Whole-leg compression could never
+have worked: it cannot distinguish a flexed tibia from a flexed femur, so it
+cannot tell antagonist afferents apart at all.
+
+```
+                loop off    old loop    split loop
+giant fibre       7.2044     28.1023        7.7625
+Kenyon cells      0.6200     12.2878        3.8834
+APL               0.6200      7.6635        3.6407
+```
+
+Specificity violation falls by 3.2x, and the giant fibre jump stops being
+destroyed. But 3.88 mm is not 0.62 mm: a Kenyon cell still moves the fly.
+
+Sweeping the gain does not rescue it, and the shape of the failure is
+informative:
+
+```
+gain      GF       KC      APL
+  90   7.7625   3.8834   3.6407
+  40  10.9711   5.9991   4.9253
+  15  13.9431   5.3028   7.8749
+   5  21.8265   4.7083   3.0308
+   2  12.7311   3.9244   3.4689
+```
+
+There is no value that works, and the giant fibre jump gets *larger* as the
+sensory gain gets smaller, which is not something a well-behaved feedback loop
+does. The loop is still positive feedback through a network with no gain
+control: activity produces motor output, motor output moves the body, body
+movement produces sensory drive, and nothing anywhere limits the round trip.
+
+So the loop stays off by default, for a reason that has moved one level down.
+It is no longer "we cannot tell the afferents apart". We can. What is missing
+is whatever normally keeps the loop stable, and the candidates -- presynaptic
+inhibition, gain scaling with behavioural state, and the reflex sign of finding
+2 that the connectome does not contain -- are all things a wiring diagram plus
+a linear neuron model does not supply.
+
+The reflex sign is now an explicit parameter, `SensoryOrgans::Params::
+reflexSign`, rather than an accident of the code. +1 is resistance, which is the
+standing case; -1 is the assistance reflex that the same anatomy implements
+during walking.

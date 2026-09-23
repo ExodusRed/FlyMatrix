@@ -204,6 +204,7 @@ int run(int argc, char** argv) {
     // specificity result the rest of the project rests on. Opt in with
     // --sensory to study it; see the README for why it does not work yet.
     bool useSensory = false;
+    bool noSplit = false;
     float extraLoad = 0.0f;
     // Print the per-leg drive on one joint each sample, so a gait
     // pattern (or its absence) is visible directly.
@@ -250,6 +251,7 @@ int run(int argc, char** argv) {
         else if (a == "--corr") corrVel = std::stof(next("--corr"));
         else if (a == "--probe-joint") probeJoint = next("--probe-joint");
         else if (a == "--sensory") useSensory = true;
+        else if (a == "--no-split") noSplit = true;
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
         else if (a == "--sensory-drive") {
@@ -270,10 +272,16 @@ int run(int argc, char** argv) {
     // can be measured against its absence.
     SensoryOrgans::Params sensoryParams;
     if (sensoryDriveSet) sensoryParams.maxDrive = sensoryDrive;
+    if (noSplit) sensoryParams.useSplit = false;
     SensoryOrgans sensory =
         SensoryOrgans::load(dataDir + "/sensory_map.tsv", sensoryParams);
-    std::printf("proprioceptors: %zu chordotonal, %zu campaniform%s\n",
-                sensory.chordotonalCount(), sensory.campaniformCount(),
+    // Optional: without it every chordotonal neuron stays in one group and
+    // the loop drives antagonist pathways with the same signal.
+    sensory.loadSplit(dataDir + "/feco_split.tsv");
+    std::printf("proprioceptors: %zu chordotonal (%zu split by target), "
+                "%zu campaniform%s\n",
+                sensory.chordotonalCount(), sensory.splitCount(),
+                sensory.campaniformCount(),
                 useSensory ? "" : "  (DISABLED)");
     std::printf("%u neurons, %zu motor neurons mapped to leg joints\n",
                 conn.neuronCount(), pools.mappedNeurons());

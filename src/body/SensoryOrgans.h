@@ -66,9 +66,49 @@ public:
         // interneuron, which is a property of the network and not of this
         // gain. See docs/findings.md section 2.
         float velocityWeight = 0.35f;
+
+        // Split the chordotonal population in two and drive the halves with
+        // opposite phases of tibia movement, instead of driving all of them
+        // with one compression signal.
+        //
+        // This is the fix for findings.md section 1. The femoral chordotonal
+        // organ contains extension-encoding and flexion-encoding cells, and
+        // feeding both the same input excites antagonist pathways together --
+        // which is why the loop, switched on, lets a Kenyon cell move the fly
+        // 12 mm. The subtype labels come from axon morphology and are not in
+        // this dataset, but they are not what is needed: what is needed is to
+        // know which cells drive tibia flexors and which drive extensors, and
+        // that is recoverable from connectivity. tools/feco_split.py measures
+        // each neuron's two-hop reach to each pool and finds the population
+        // sharply bimodal -- of the cells reaching both pools, 89% favour one
+        // by a margin, and only 6% sit near the middle.
+        bool useSplit = true;
+
+        // Sign of the reflex, and the one parameter here that the connectome
+        // cannot supply.
+        //
+        // +1 is resistance: tibia extension excites flexors, opposing the
+        // movement and stabilising the joint, which is the standing case.
+        // -1 is assistance, which is what the same anatomy does during walking
+        // -- reflex reversal is well established in stick insect and locust
+        // work and reported in Drosophila. The connectome contains both and
+        // says nothing about which is in force, because the thing that selects
+        // between them is behavioural state. See findings.md section 2. This
+        // is an explicit modelling choice and is labelled as one.
+        float reflexSign = +1.0f;
+
+        // Tibia deviation from the rest angle, in radians, counting as a full
+        // chordotonal signal.
+        float fullTibiaAngle = 0.5f;
     };
 
     static SensoryOrgans load(const std::string& tsvPath, Params params = {});
+
+    // Load the extensor/flexor assignment from tools/feco_split.py. Without
+    // it every chordotonal neuron stays in one undifferentiated group and the
+    // loop behaves as it did before.
+    void loadSplit(const std::string& tsvPath);
+    std::size_t splitCount() const { return splitAssigned_; }
 
     // Read the body's state and drive the sensory neurons from it. Only
     // touches neurons in the map, so a stimulus applied elsewhere -- the giant
@@ -88,6 +128,9 @@ private:
     struct Organ {
         std::uint32_t neuron;
         int leg;
+        // Which side of the joint this neuron drives, from feco_split.tsv.
+        // +1 drives extensors, -1 drives flexors, 0 unassigned.
+        int side = 0;
     };
 
     Params p_;
@@ -97,6 +140,8 @@ private:
     std::array<float, kLegCount> campaniformDrive_{};
     std::array<float, kLegCount> lastSpan_{};
     bool haveLastSpan_ = false;
+    std::size_t splitAssigned_ = 0;
+    std::array<float, kLegCount> tibiaDrive_{};
 };
 
 }  // namespace fly
