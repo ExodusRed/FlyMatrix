@@ -214,6 +214,18 @@ void FlyPhysics::step(float dtSeconds, const MotorPools& pools) {
             // so there is no per-joint fudge factor here any more: a jump
             // muscle is strong because the muscle is strong.
             HingeJoint& hj = world.joints[jointIndex_[l][j]];
+            // An imposed pattern overrides the pools, the same way it does in
+            // the mechanics-only step. Without this branch here, setting
+            // useManualTarget on the path that has a nervous system attached
+            // silently did nothing, and the "walking" in the 3D view was the
+            // default giant-fibre stimulus landing askew.
+            if (params.useManualTarget) {
+                hj.targetAngle = restAngle_[l][j] + params.manualTarget[l][j];
+                hj.maxTorque = params.postureTorque;
+                hj.servoRate = params.servoRate;
+                hj.muscleTorque = 0.0f;
+                continue;
+            }
             const float d = (params.forceJoint == j) ? params.forceDrive
                                                     : pools.drive(l, j);
             peakDrive_ = std::max(peakDrive_, std::fabs(d));

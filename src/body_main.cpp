@@ -205,6 +205,11 @@ int run(int argc, char** argv) {
     // --sensory to study it; see the README for why it does not work yet.
     bool useSensory = false;
     bool noSplit = false;
+    // Imposed tripod in the 3D view. Same hand-built pattern as
+    // flyphys --gait, and the same caveat: the rhythm is a sine wave,
+    // not a neuron. It is here so the walking can be watched.
+    float gaitPeriodMs = 0.0f;
+    float gaitSwing = 0.3f;
     float extraLoad = 0.0f;
     // Print the per-leg drive on one joint each sample, so a gait
     // pattern (or its absence) is visible directly.
@@ -252,6 +257,8 @@ int run(int argc, char** argv) {
         else if (a == "--probe-joint") probeJoint = next("--probe-joint");
         else if (a == "--sensory") useSensory = true;
         else if (a == "--no-split") noSplit = true;
+        else if (a == "--gait") gaitPeriodMs = std::stof(next("--gait"));
+        else if (a == "--gait-swing") gaitSwing = std::stof(next("--gait-swing"));
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
         else if (a == "--sensory-drive") {
@@ -311,6 +318,8 @@ int run(int argc, char** argv) {
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
     if (usePhysics) phys.build(body);
+    if (gaitPeriodMs > 0.0f) phys.params.useManualTarget = true;
+    float gaitClockMs = 0.0f;
     if (corrVel > 0.0f) phys.world.params.maxCorrectionVelocity = corrVel;
 
     if (dumpPose) {
@@ -415,6 +424,20 @@ int run(int argc, char** argv) {
             // open the fly simply sags under it.
             if (extraLoad != 0.0f) {
                 phys.world.bodies[0].force += V3{0, 0, -extraLoad};
+            }
+            if (gaitPeriodMs > 0.0f) {
+                static const bool tripodA[kLegCount] =
+                    {true, false, false, true, true, false};
+                gaitClockMs += physDt * 1000.0f;
+                const float phase = 6.2831853f * gaitClockMs / gaitPeriodMs;
+                for (int l = 0; l < kLegCount; ++l) {
+                    const float ph = tripodA[l] ? phase : phase + 3.14159265f;
+                    phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
+                        -gaitSwing * std::sin(ph);
+                    const float c = std::cos(ph);
+                    phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
+                        (c > 0.0f) ? gaitSwing * 0.6f * c : 0.0f;
+                }
             }
             phys.step(physDt, pools);
 
@@ -574,11 +597,49 @@ int run(int argc, char** argv) {
         pools.update(frameMs);
         if (!usePhysics) pools.applyToSkeleton(body);
         if (usePhysics) {
+            if (gaitPeriodMs > 0.0f) {
+                // Alternating tripod: front_L, middle_R and hind_L swing
+                // together, against the other three. Identical to the pattern
+                // flyphys --gait measures, and carrying the same caveat --
+                // the rhythm is a sine wave, not a neuron, so this shows the
+                // body walking rather than the connectome walking it.
+                static const bool tripodA[kLegCount] =
+                    {true, false, false, true, true, false};
+                gaitClockMs += frameMs;
+                const float phase = 6.2831853f * gaitClockMs / gaitPeriodMs;
+                for (int l = 0; l < kLegCount; ++l) {
+                    const float ph = tripodA[l] ? phase : phase + 3.14159265f;
+                    phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
+                        -gaitSwing * std::sin(ph);
+                    const float c = std::cos(ph);
+                    phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
+                        (c > 0.0f) ? gaitSwing * 0.6f * c : 0.0f;
+                }
+            }
             phys.step(frameMs / 1000.0f, pools);
             // Close the loop: body state drives the proprioceptors, which
             // drive the network on the next frame.
             if (useSensory) sensory.sense(phys, net, frameMs);
             phys.readPose(segments);
+            // Carry the physics trunk back onto the skeleton, which is what
+            // the body, head and eyes are drawn from.
+            //
+            // Without this the legs came from the solver and the trunk came
+            // from a Transform nothing ever wrote to, so the two only agreed
+            // while the fly stayed put. It looked fine standing and was wrong
+            // every time the body actually moved -- during a jump, and
+            // spectacularly while walking, where the legs strode off and left
+            // the body hanging behind them.
+            body.root.position = phys.thorax().position;
+            body.root.rotation = phys.thorax().orientation;
+            // Keep a walking fly in shot. Eased rather than locked, so the
+            // camera does not inherit the gait's bounce, and only the
+            // horizontal position is followed so height changes stay visible.
+            if (gaitPeriodMs > 0.0f) {
+                const V3 want{phys.thorax().position.x,
+                              phys.thorax().position.y, cam.target.z};
+                cam.target = cam.target + (want - cam.target) * 0.06f;
+            }
         } else {
             body.worldPose(segments);
         }
