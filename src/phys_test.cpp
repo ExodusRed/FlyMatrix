@@ -404,15 +404,24 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gait") == 0) {
-            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 40.0f;
+            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 30.0f;
             // Radians of ThC swing, not an abstract drive number.
             const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.3f;
             // Lift defaults well above the swing amplitude. Tied to it at
             // 0.6 * amp the swing legs never cleared the ground and the fly
             // scuffed along at a duty factor of 0.77.
+            //
+            // Period 30 with lift 0.7 is chosen as a basin rather than a
+            // peak: every lift from 0.35 to 0.9 at that period holds pitch
+            // between 9.0 and 11.3 degrees. At periods of 55 and 70 the same
+            // sweep has an edge where pitch jumps to 77-84, and picking a
+            // single fast-looking point next to one of those is how you get a
+            // result that a recompile can undo -- caching the world inertia,
+            // which changes no physics at all, moved the old default from
+            // 12.8 degrees of pitch to 43.5.
             const float lift = (i + 3 < argc && argv[i + 3][0] != '-')
                                    ? std::stof(argv[i + 3])
-                                   : 0.6f;
+                                   : 0.7f;
             return gaitTest(periodMs, amp, lift);
         }
     }

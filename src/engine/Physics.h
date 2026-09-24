@@ -45,10 +45,28 @@ struct RigidBody {
     V3 pseudoAngular;
 
     // Inverse inertia rotated into world space, which is what the solver needs.
-    M3 invInertiaWorld() const {
+    // Cached, because it is an invariant of the solve and was being rebuilt
+    // as though it were not.
+    //
+    // R * I_local * R^T depends only on orientation, and orientation does not
+    // change while the solver iterates -- positions are integrated once, at
+    // the end of the substep. The solver asks for it about four times per
+    // joint per iteration, which at 64 iterations, 56 joints and 8 kHz
+    // substeps is some 229 million quaternion-to-matrix conversions and
+    // 3x3 products per two seconds of simulated time, all of them returning
+    // the same answer.
+    //
+    // refreshInertiaWorld() is called for every body at the top of
+    // PhysicsWorld::step, so anything inside a step sees a current value. A
+    // caller that rotates a body by hand and then asks must refresh it.
+    M3 invInertiaWorld() const { return invInertiaW_; }
+
+    void refreshInertiaWorld() {
         const M3 r = M3::fromQuat(orientation);
-        return r * invInertiaLocal * r.transposed();
+        invInertiaW_ = r * invInertiaLocal * r.transposed();
     }
+
+    M3 invInertiaW_ = M3::zero();
 
     void applyImpulse(const V3& impulse, const V3& relativePoint) {
         velocity += impulse * invMass;

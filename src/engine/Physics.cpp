@@ -562,6 +562,9 @@ void PhysicsWorld::integratePositions(float dt) {
 
 void PhysicsWorld::step(float dt) {
     if (dt <= 0.0f) return;
+    // Orientation is fixed for the rest of this substep, so the world-space
+    // inverse inertia can be computed once here instead of per iteration.
+    for (auto& b : bodies) b.refreshInertiaWorld();
     integrateVelocities(dt);
     buildGroundContacts();
     solveJoints(dt);

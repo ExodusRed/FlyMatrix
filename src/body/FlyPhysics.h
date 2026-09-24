@@ -115,18 +115,32 @@ public:
         // 0.58 mm stance, against roughly 4.6 mm ballistic for a real
         // Drosophila taking off at 0.3 m/s. The usable window is narrow and
         // not monotonic: 4e5 and 6e5 both diverge sooner than this does.
-        // Recalibrated against the corrected solver, the new anatomy and the
-        // lighter legs. At 2e6 the giant fibre jump peaks at 4.32 mm against
-        // a real escape takeoff of about 4.6 mm ballistic. The old 5e5 dated
-        // from when the joint-limit constraint was amplifying every impulse
-        // 64 times, and produced 0.79 mm once that was fixed.
+        // THIS IS NOT A CALIBRATION, and it would be a mistake to treat the
+        // jump height it produces as one.
         //
-        // Do not read this as a precise calibration. The fine structure is
-        // still non-monotonic -- 2.0e6 gives 4.32 mm, 2.4e6 gives 7.32 and
-        // 2.8e6 gives 2.56 -- because a jump is a brief, violent,
-        // near-threshold event and small timing changes flip the outcome.
-        // The coarse trend across decades is monotonic; this band is not.
-        float maxMuscleTorque = 2.0e6f;    // ug*mm^2/s^2
+        // The giant fibre jump is chaotic with respect to this parameter.
+        // Sampled across the plausible band, in millimetres of peak height
+        // against a real escape takeoff of about 4.6 mm:
+        //
+        //   1.4e6  12.91     2.2e6   2.38     2.7e6   4.43
+        //   1.6e6   2.71     2.4e6   2.77     2.8e6   3.21
+        //   1.8e6   4.71     2.5e6   6.32     2.9e6   9.77
+        //   2.0e6   2.98     2.6e6   3.38     3.0e6  17.51
+        //
+        // There is no plateau. Sampling more finely does not find one -- what
+        // looked like a smooth stretch at 2.2/2.4/2.6 was aliasing, and the
+        // points between it are 6.32 and 4.43. A jump is a brief, violent,
+        // near-threshold event and small timing differences flip the outcome,
+        // which is why merely caching the world inertia -- a change that
+        // alters no physics -- moved this from 4.32 mm to 2.98.
+        //
+        // 2.7e6 is one sample that happens to land near the animal. Its
+        // neighbours give 3.21 and 9.77. Choosing it because 4.43 looks right
+        // would be fitting to noise, so it is chosen and labelled instead.
+        //
+        // The model cannot currently produce a reproducible escape jump of a
+        // given height. That is a real limitation, not a tuning problem.
+        float maxMuscleTorque = 2.7e6f;    // ug*mm^2/s^2
         // Torque budget a joint can spend holding its posture. This is a
         // bound on an impulse, not a spring gain, so it can be raised freely
         // without threatening the integrator.

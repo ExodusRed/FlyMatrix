@@ -18,6 +18,9 @@ import numpy as np
 BODY_Z = 0.62
 BODY_RADIUS = 0.38
 GROUND_Z = 0.0
+# The ankle rides a tarsus-radius above the floor so the tarsus lying flat
+# rests on it rather than through it.
+ANKLE_Z = 0.020
 
 # Mirrors src/body/Anatomy.h. If these disagree the solved rest pose is
 # for a different animal than the one that gets built.
@@ -26,9 +29,9 @@ SEG = dict(coxa=0.26, troch=0.09, femur=0.54, tibia=0.50, tarsus=0.55)
 LEGS = [
     # name, attachX, lengthScale, target foot (x, y, z) for the LEFT leg,
     # fixed outward mount tilt (radians, about the fore-aft axis)
-    ("front",  0.34, 0.88, (0.92, 0.72, GROUND_Z), 0.657),
-    ("middle", 0.02, 1.00, (0.05, 0.92, GROUND_Z), 0.909),
-    ("hind",  -0.30, 1.12, (-0.92, 0.88, GROUND_Z), 0.893),
+    ("front",  0.34, 0.88, (0.72, 0.72, ANKLE_Z), 0.657),
+    ("middle", 0.02, 1.00, (-0.15, 0.92, ANKLE_Z), 0.909),
+    ("hind",  -0.30, 1.12, (-1.12, 0.88, ANKLE_Z), 0.893),
 ]
 
 # Axes for a left leg, in the order ThC, CTr, TrF, FTi, TiTa.
@@ -86,36 +89,81 @@ def quat_rotate(q, v):
     return v + q[0] * t + np.cross(qv, t)
 
 
-def foot_position(angles, attach, lengths, mount):
-    """Forward kinematics, matching FlyBody::footPosition."""
+def chain(angles, attach, lengths, mount, n):
+    """Walk the first n joints, returning the position and frame after them."""
     pos = np.array(attach, dtype=float)
     # The leg is mounted with a fixed outward tilt before any joint applies.
     rot = quat_axis_angle(np.array([1.0, 0.0, 0.0]), mount)
-    for i in range(5):
+    for i in range(n):
         rot = quat_mul(rot, quat_axis_angle(AXES[i], angles[i]))
         pos = pos + quat_rotate(rot, np.array([0.0, 0.0, -1.0])) * lengths[i]
-    return pos
+    return pos, rot
+
+
+def foot_position(angles, attach, lengths, mount):
+    """Forward kinematics, matching FlyBody::footPosition."""
+    return chain(angles, attach, lengths, mount, 5)[0]
+
+
+def ankle_position(angles, attach, lengths, mount):
+    """Position of the tibia-tarsus joint: the chain through FTi only."""
+    return chain(angles, attach, lengths, mount, 4)[0]
+
+
+def flat_tarsus_angle(angles, attach, lengths, mount):
+    """TiTa angle that lays the tarsus flat along the ground.
+
+    A real fly does not stand on the tip of its tarsus. The tarsus lies
+    *along* the substrate -- that is what the five tarsomeres are for, and
+    what the adhesive pads act through. Solving the rest pose for a single
+    point foot put the rest of a jointed tarsus below the floor, which is
+    both why the legs appeared to clip through it and why switching on
+    per-tarsomere contact probes lifted the body to 0.94 mm.
+
+    After the first four joints the frame is fixed, and the tarsus points
+    along R * R_y(t) * (0,0,-1). Setting the vertical component of that to
+    zero is one equation in one unknown.
+    """
+    _, rot = chain(angles, attach, lengths, mount, 4)
+    # Columns of R applied to the two basis directions the hinge sweeps.
+    ez = quat_rotate(rot, np.array([0.0, 0.0, -1.0]))
+    ex = quat_rotate(rot, np.array([-1.0, 0.0, 0.0]))
+    # dir(t) = cos(t)*ez + sin(t)*ex; want dir.z == 0.
+    t = np.arctan2(-ez[2], ex[2])
+    # Two solutions half a turn apart; take the one pointing forward.
+    if (np.cos(t) * ez + np.sin(t) * ex)[0] < 0:
+        t += np.pi
+    return np.arctan2(np.sin(t), np.cos(t))
 
 
 def solve(attach, lengths, target, seed, mount, limits):
+    """Place the ankle, then lay the tarsus flat.
+
+    Only the first four joints move the ankle, so the Jacobian is 3x4 and
+    TiTa drops out of the search entirely -- it is then set analytically to
+    whatever lays the tarsus along the ground.
+    """
     angles = seed.copy()
     lam = 1e-3
-    for _ in range(1500):
-        err = foot_position(angles, attach, lengths, mount) - target
+    for _ in range(500):
+        err = ankle_position(angles, attach, lengths, mount) - target
         if np.linalg.norm(err) < 1e-6:
             break
-        # Numerical Jacobian: 5 columns, cheap enough at this size.
-        J = np.zeros((3, 5))
+        J = np.zeros((3, 4))
         eps = 1e-5
-        for k in range(5):
+        for k in range(4):
             bumped = angles.copy()
             bumped[k] += eps
-            J[:, k] = (foot_position(bumped, attach, lengths, mount) - err - target) / eps
-        # Damped least squares, with a pull toward the seed so the five
-        # redundant joints settle on a natural posture instead of drifting.
-        A = J.T @ J + (lam + 0.002) * np.eye(5)
-        b = J.T @ err + 0.002 * (angles - seed)
-        angles = np.clip(angles - np.linalg.solve(A, b), limits[:, 0], limits[:, 1])
+            J[:, k] = (ankle_position(bumped, attach, lengths, mount)
+                       - err - target) / eps
+        # Damped least squares, with a pull toward the seed so the redundant
+        # joints settle on a natural posture instead of drifting.
+        A = J.T @ J + (lam + 0.002) * np.eye(4)
+        b = J.T @ err + 0.002 * (angles[:4] - seed[:4])
+        angles[:4] = np.clip(angles[:4] - np.linalg.solve(A, b),
+                             limits[:4, 0], limits[:4, 1])
+    angles[4] = np.clip(flat_tarsus_angle(angles, attach, lengths, mount),
+                        limits[4, 0], limits[4, 1])
     return angles
 
 
@@ -151,7 +199,7 @@ def solve_leg(attach_x, scale, target, mount, branch):
                 angles = solve(attach, lengths, np.array(target, float), seed,
                                mount, limits)
                 err = np.linalg.norm(
-                    foot_position(angles, attach, lengths, mount)
+                    ankle_position(angles, attach, lengths, mount)
                     - np.array(target))
                 margin = np.min(np.minimum(angles - limits[:, 0],
                                            limits[:, 1] - angles))
@@ -201,12 +249,17 @@ def main() -> None:
 
     results = {}
     for name, (angles, attach, lengths, target, mount) in best_results.items():
+        ankle = ankle_position(angles, attach, lengths, mount)
         foot = foot_position(angles, attach, lengths, mount)
-        err = np.linalg.norm(foot - np.array(target))
+        err = np.linalg.norm(ankle - np.array(target))
         margin = np.min(np.minimum(angles - LIMITS[:, 0], LIMITS[:, 1] - angles))
         results[name] = angles
-        print(f"{name:<7} foot = ({foot[0]:+.3f}, {foot[1]:+.3f}, {foot[2]:+.3f})"
-              f"   error {err*1000:6.1f} um   limit margin {margin:.3f} rad")
+        print(f"{name:<7} ankle = ({ankle[0]:+.3f}, {ankle[1]:+.3f}, "
+              f"{ankle[2]:+.3f})  tarsus tip = ({foot[0]:+.3f}, {foot[1]:+.3f}, "
+              f"{foot[2]:+.3f})")
+        print(f"        error {err*1000:6.1f} um   tarsus rise "
+              f"{(foot[2] - ankle[2])*1000:+6.1f} um   "
+              f"limit margin {margin:.3f} rad")
 
     print("\nrest angles, radians:")
     print(f"  {'leg':<8}" + "".join(f"{j:>9}" for j in JOINT_NAMES))
