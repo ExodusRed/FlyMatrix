@@ -23,6 +23,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "body/Anatomy.h"
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
@@ -237,6 +238,9 @@ int run(int argc, char** argv) {
     // place rather than floating in a void, and default off in the engine so
     // the headless measurements are unchanged.
     bool showArena = true;
+    bool showWings = true;
+    // Camera overrides, for looking at the model from a chosen angle.
+    float camYaw = 0.8f, camPitch = -0.32f, camDist = -1.0f;
     bool arenaWalls = true;
     bool wallsExplicit = false;
     bool arenaCeiling = false;
@@ -294,6 +298,12 @@ int run(int argc, char** argv) {
         else if (a == "--gait-swing") gaitSwing = std::stof(next("--gait-swing"));
         else if (a == "--arena") arenaSize = std::stof(next("--arena"));
         else if (a == "--no-arena") showArena = false;
+        else if (a == "--no-wings") showWings = false;
+        else if (a == "--cam") {
+            camYaw = std::stof(next("--cam"));
+            camPitch = std::stof(next("--cam"));
+            camDist = std::stof(next("--cam"));
+        }
         else if (a == "--no-walls") { arenaWalls = false; wallsExplicit = true; }
         else if (a == "--walls") { arenaWalls = true; wallsExplicit = true; }
         else if (a == "--ceiling") arenaCeiling = true;
@@ -598,8 +608,9 @@ int run(int argc, char** argv) {
     // +sin(pitch): a positive pitch puts the camera *below* the target. It
     // always had, and with nothing drawn at z = 0 nobody noticed the fly was
     // being viewed from underground until there was a floor to hide behind.
-    cam.pitch = -0.32f;
-    cam.yaw = 0.8f;
+    cam.pitch = camPitch;
+    cam.yaw = camYaw;
+    if (camDist > 0.0f) cam.distance = camDist;
 
     bool running = true, dragL = false, dragR = false, stimulating = false;
     float stimRemaining = 0.0f;
@@ -774,6 +785,22 @@ int run(int argc, char** argv) {
             mesh.draw();
         };
 
+        // Translucent draw with an arbitrary transform and mesh, for the
+        // wing membrane.
+        auto drawGlassAt = [&](const Transform& t, const V3& stretch,
+                               const V3& colour, float alpha, const Mesh& mesh) {
+            const M4 model = M4::fromTransform(t, stretch);
+            const M4 nrm = M4::fromTransform({{0, 0, 0}, t.rotation, 1.0f},
+                                             {1.0f / stretch.x, 1.0f / stretch.y,
+                                              1.0f / stretch.z});
+            gl::glUniformMatrix4fv(uModel, 1, GL_FALSE, model.m);
+            gl::glUniformMatrix4fv(uNormalMat, 1, GL_FALSE, nrm.m);
+            gl::glUniform3f(uColour, colour.x, colour.y, colour.z);
+            gl::glUniform1f(uGlow, 0.0f);
+            gl::glUniform1f(uAlpha, alpha);
+            mesh.draw();
+        };
+
         // Same, but translucent: used for the arena's glass.
         auto drawGlass = [&](const V3& centre, const V3& half, const V3& colour,
                              float alpha) {
@@ -816,16 +843,56 @@ int run(int argc, char** argv) {
         // Body: thorax, abdomen behind it, head in front. The long axis is X
         // (fore-aft), so that is where the length goes -- putting it on Z
         // stands the fly on end.
-        drawPart({body.root.position, body.root.rotation, 1.0f},
-                 {0.46f, 0.30f, 0.30f}, {0.40f, 0.31f, 0.21f}, 0.0f, sph);
-        drawPart({body.root.apply({-0.78f, 0, -0.04f}), body.root.rotation, 1.0f},
-                 {0.52f, 0.26f, 0.26f}, {0.27f, 0.21f, 0.14f}, 0.0f, sph);
-        drawPart({body.root.apply({0.52f, 0, 0.05f}), body.root.rotation, 1.0f},
-                 {0.22f, 0.21f, 0.21f}, {0.44f, 0.29f, 0.20f}, 0.0f, sph);
-        // Eyes.
+        const Quat& bq = body.root.rotation;
+        auto at = [&](const V3& local) { return body.root.apply(local); };
+
+        drawPart({body.root.position, bq, 1.0f}, anat::kThoraxHalf,
+                 {0.40f, 0.31f, 0.21f}, 0.0f, sph);
+        drawPart({at({anat::kAbdomenX, 0, anat::kAbdomenZ}), bq, 1.0f},
+                 anat::kAbdomenHalf, {0.27f, 0.21f, 0.14f}, 0.0f, sph);
+        drawPart({at({anat::kHeadX, 0, anat::kHeadZ}), bq, 1.0f},
+                 anat::kHeadHalf, {0.44f, 0.29f, 0.20f}, 0.0f, sph);
+
+        // Eyes: large, and most of the head.
         for (int e = -1; e <= 1; e += 2) {
-            drawPart({body.root.apply({0.60f, 0.15f * e, 0.07f}), body.root.rotation, 1.0f},
-                     {0.13f, 0.11f, 0.15f}, {0.55f, 0.13f, 0.08f}, 0.0f, sph);
+            drawPart({at({anat::kHeadX + anat::kEyeOffset.x,
+                          anat::kEyeOffset.y * e,
+                          anat::kHeadZ + anat::kEyeOffset.z}), bq, 1.0f},
+                     anat::kEyeHalf, {0.58f, 0.12f, 0.07f}, 0.0f, sph);
+        }
+
+        // Proboscis: rostrum, haustellum, and the paired labellar lobes that
+        // touch the food. Drawn retracted, folded under the head. Without it
+        // the fly had no mouthparts at all and could not have fed.
+        drawPart({at({anat::kHeadX + anat::kRostrumOffset.x, 0,
+                      anat::kHeadZ + anat::kRostrumOffset.z}), bq, 1.0f},
+                 anat::kRostrumHalf, {0.36f, 0.25f, 0.17f}, 0.0f, sph);
+        drawPart({at({anat::kHeadX + anat::kHaustellumOffset.x, 0,
+                      anat::kHeadZ + anat::kHaustellumOffset.z}), bq, 1.0f},
+                 anat::kHaustellumHalf, {0.31f, 0.22f, 0.15f}, 0.0f, sph);
+        for (int e = -1; e <= 1; e += 2) {
+            drawPart({at({anat::kHeadX + anat::kLabellumOffset.x,
+                          anat::kLabellumOffset.y * e,
+                          anat::kHeadZ + anat::kLabellumOffset.z}), bq, 1.0f},
+                     anat::kLabellumHalf, {0.42f, 0.30f, 0.22f}, 0.0f, sph);
+        }
+
+        // Antennae: the funiculus and its arista, which is the feathery
+        // bristle a fly senses air with.
+        for (int e = -1; e <= 1; e += 2) {
+            const V3 base = at({anat::kHeadX + anat::kFuniculusOffset.x,
+                                anat::kFuniculusOffset.y * e,
+                                anat::kHeadZ + anat::kFuniculusOffset.z});
+            drawPart({base, bq, 1.0f}, anat::kFuniculusHalf,
+                     {0.34f, 0.24f, 0.16f}, 0.0f, sph);
+            // Swept forward and outward from the funiculus.
+            const V3 tip = at({anat::kHeadX + anat::kFuniculusOffset.x + 0.20f,
+                               (anat::kFuniculusOffset.y + 0.13f) * e,
+                               anat::kHeadZ + anat::kFuniculusOffset.z + 0.10f});
+            drawPart({base, aimDownZ(tip - base), 1.0f},
+                     {anat::kAristaRadius, anat::kAristaRadius,
+                      anat::kAristaLength},
+                     {0.30f, 0.26f, 0.20f}, 0.0f, cyl);
         }
 
         // Legs. Each segment glows with how hard its joint is being driven, so
@@ -846,6 +913,55 @@ int run(int argc, char** argv) {
             drawPart({seg.a, Quat{}, 1.0f},
                      {seg.radius * 1.25f, seg.radius * 1.25f, seg.radius * 1.25f},
                      {0.38f, 0.32f, 0.24f}, glow, sph);
+        }
+
+        // Wings and halteres, after the opaque body so the membrane blends
+        // against it rather than against an empty framebuffer.
+        //
+        // A fly's wing is a flat bilayered blade about as long as its whole
+        // body, folded back over the abdomen at rest and overhanging its tip.
+        // Halteres are the club-shaped organs behind them on the metathorax:
+        // the serial homologue of the hind wings, and the fly's gyroscopes.
+        if (showWings) {
+            for (int e = -1; e <= 1; e += 2) {
+                const V3 root = at({anat::kWingRoot.x, anat::kWingRoot.y * e,
+                                    anat::kWingRoot.z});
+                // Swept back along the body, splayed outward, tilted a little
+                // nose-up. Built as a rotation about Z then X so the blade
+                // lies roughly flat.
+                const Quat sweep =
+                    Quat::axisAngle({0, 0, 1}, (3.14159265f - anat::kWingSweepRad) * -e);
+                const Quat tilt = Quat::axisAngle({1, 0, 0}, anat::kWingTiltRad * e);
+                const Quat wq = (bq * sweep * tilt).normalised();
+                // The blade's own centre is half a wing-length out from the
+                // hinge, so it trails behind rather than straddling it.
+                const V3 centre = root + wq.rotate({anat::kWingLength * 0.5f, 0, 0});
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDepthMask(GL_FALSE);
+                drawGlassAt({centre, wq, 1.0f},
+                            {anat::kWingLength * 0.5f, anat::kWingWidth * 0.5f,
+                             anat::kWingThickness},
+                            {0.62f, 0.68f, 0.76f}, 0.22f, sph);
+                glDepthMask(GL_TRUE);
+                glDisable(GL_BLEND);
+
+                // Haltere: a thin stalk ending in a knob.
+                const V3 hroot = at({anat::kHaltereRoot.x,
+                                     anat::kHaltereRoot.y * e,
+                                     anat::kHaltereRoot.z});
+                const V3 hend = at({anat::kHaltereRoot.x - 0.15f,
+                                    (anat::kHaltereRoot.y + 0.02f) * e,
+                                    anat::kHaltereRoot.z - 0.09f});
+                drawPart({hroot, aimDownZ(hend - hroot), 1.0f},
+                         {anat::kHaltereStalkRadius, anat::kHaltereStalkRadius,
+                          anat::kHaltereStalk},
+                         {0.44f, 0.36f, 0.26f}, 0.0f, cyl);
+                drawPart({hend, Quat{}, 1.0f},
+                         {anat::kHaltereKnobRadius, anat::kHaltereKnobRadius,
+                          anat::kHaltereKnobRadius},
+                         {0.50f, 0.40f, 0.28f}, 0.0f, sph);
+            }
         }
 
         // Glass last, and with depth writes off. Translucent surfaces have

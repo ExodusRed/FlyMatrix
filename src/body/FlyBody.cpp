@@ -1,5 +1,7 @@
 #include "FlyBody.h"
 
+#include "body/Anatomy.h"
+
 #include <algorithm>
 
 namespace fly {
@@ -37,10 +39,10 @@ struct LegLayout {
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
 constexpr LegLayout kLayout[kLegCount] = {
-    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, {-0.841f, -1.446f, -0.072f,  2.081f, 0.374f}},
-    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, {-0.841f, -1.446f, -0.072f,  2.081f, 0.374f}},
-    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, {-0.515f, -1.194f, -0.011f,  2.288f, 0.457f}},
-    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, {-0.515f, -1.194f, -0.011f,  2.288f, 0.457f}},
+    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, {-0.803f, -1.401f, -0.073f,  1.746f, 0.938f}},
+    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, {-0.803f, -1.401f, -0.073f,  1.746f, 0.938f}},
+    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, {-0.567f, -1.217f, -0.011f,  2.320f, 0.491f}},
+    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, {-0.567f, -1.217f, -0.011f,  2.320f, 0.491f}},
     // All six legs now fold the same way -- CTr negative, FTi positive -- and
     // reach fore and aft with ThC instead. The rest-pose solver picks that
     // configuration once for the whole animal and scores it 83x better than
@@ -48,17 +50,18 @@ constexpr LegLayout kLayout[kLegCount] = {
     // the geometry's wishes; it is what the geometry prefers once ThC is free
     // to swing. The ThC gradient across the leg pairs, -0.841 front to -0.061
     // hind, is what used to be faked by folding the front legs backwards.
-    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, {-0.061f, -0.655f,  0.008f,  2.127f, 0.365f}},
-    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, {-0.061f, -0.655f,  0.008f,  2.127f, 0.365f}},
+    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, {-0.111f, -0.677f,  0.008f,  2.167f, 0.397f}},
+    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, {-0.111f, -0.677f,  0.008f,  2.167f, 0.397f}},
 };
 
 // Segment lengths for a middle leg, in millimetres, scaled per leg above.
-// The trochanter is a very short hinge between coxa and femur.
-constexpr float kCoxaLen = 0.26f;
-constexpr float kTrochLen = 0.08f;
-constexpr float kFemurLen = 0.52f;
-constexpr float kTibiaLen = 0.48f;
-constexpr float kTarsusLen = 0.50f;
+// The trochanter is a very short hinge between coxa and femur. Sourced in
+// body/Anatomy.h along with the rest of the animal.
+constexpr float kCoxaLen = anat::kCoxaLen;
+constexpr float kTrochLen = anat::kTrochLen;
+constexpr float kFemurLen = anat::kFemurLen;
+constexpr float kTibiaLen = anat::kTibiaLen;
+constexpr float kTarsusLen = anat::kTarsusLen;
 
 }  // namespace
 

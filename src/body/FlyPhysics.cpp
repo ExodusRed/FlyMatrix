@@ -21,24 +21,26 @@ Quat aimDownZ(const V3& dir) {
 void FlyPhysics::build(const FlyBody& skeleton) {
     world = PhysicsWorld{};
     segments_.clear();
+    probeLeg_.clear();
 
     // --- trunk ---
     RigidBody thorax;
     thorax.position = skeleton.root.position;
     thorax.orientation = skeleton.root.rotation;
-    thorax.setBoxInertia(params.thoraxMass, {0.46f, 0.30f, 0.30f});
+    thorax.setBoxInertia(params.thoraxMass, anat::kThoraxHalf);
     thorax_ = world.addBody(thorax);
 
     RigidBody abdomen;
-    abdomen.position = skeleton.root.apply({params.abdomenOffsetX, 0, -0.04f});
+    abdomen.position =
+        skeleton.root.apply({params.abdomenOffsetX, 0, anat::kAbdomenZ});
     abdomen.orientation = skeleton.root.rotation;
-    abdomen.setBoxInertia(params.abdomenMass, {0.52f, 0.26f, 0.26f});
+    abdomen.setBoxInertia(params.abdomenMass, anat::kAbdomenHalf);
     abdomen_ = world.addBody(abdomen);
 
     RigidBody head;
-    head.position = skeleton.root.apply({0.52f, 0, 0.05f});
+    head.position = skeleton.root.apply({anat::kHeadX, 0, anat::kHeadZ});
     head.orientation = skeleton.root.rotation;
-    head.setBoxInertia(params.headMass, {0.22f, 0.21f, 0.21f});
+    head.setBoxInertia(params.headMass, anat::kHeadHalf);
     head_ = world.addBody(head);
 
     // Abdomen and head are welded to the thorax.
@@ -46,11 +48,12 @@ void FlyPhysics::build(const FlyBody& skeleton) {
         HingeJoint j;
         j.a = thorax_;
         j.b = abdomen_;
-        j.anchorA = {-0.40f, 0, -0.02f};
+        j.anchorA = {anat::kThoraxHalf.x * -0.8f, 0, -0.02f};
         // The shared anchor sits at -0.40 in the thorax's frame; expressed
         // in the abdomen's frame that is -0.40 minus the abdomen's own
         // offset, which for the default -0.78 gives +0.38.
-        j.anchorB = {-0.40f - params.abdomenOffsetX, 0, 0.02f};
+        j.anchorB = {anat::kThoraxHalf.x * -0.8f - params.abdomenOffsetX, 0,
+                     0.02f};
         j.axisA = j.axisB = {0, 1, 0};
         j.weld = true;
         world.joints.push_back(j);
@@ -58,8 +61,8 @@ void FlyPhysics::build(const FlyBody& skeleton) {
         HingeJoint h;
         h.a = thorax_;
         h.b = head_;
-        h.anchorA = {0.42f, 0, 0.04f};
-        h.anchorB = {-0.10f, 0, -0.01f};
+        h.anchorA = {anat::kThoraxHalf.x * 0.85f, 0, 0.04f};
+        h.anchorB = {anat::kThoraxHalf.x * 0.85f - anat::kHeadX, 0, -0.01f};
         h.axisA = h.axisB = {0, 1, 0};
         h.weld = true;
         world.joints.push_back(h);
@@ -69,6 +72,18 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     std::vector<FlyBody::SegmentPose> pose;
     skeleton.worldPose(pose);
 
+    // Where each leg's tarsal chain continues from, captured while the main
+    // segments are built and used by the second pass below.
+    struct TarsusHead {
+        std::uint32_t body = 0;
+        V3 anchor;      // in the parent's frame
+        V3 tip;         // world position of ta1's distal end
+        Quat rot;       // ta1's orientation
+        float full = 0.0f;    // full tarsus length for this leg
+        float radius = 0.02f;
+    };
+    std::array<TarsusHead, kLegCount> tarsusHead{};
+
     for (int l = 0; l < kLegCount; ++l) {
         const Leg& leg = skeleton.legs()[l];
         std::uint32_t parent = thorax_;
@@ -77,7 +92,16 @@ void FlyPhysics::build(const FlyBody& skeleton) {
         for (int j = 0; j < kJointCount; ++j) {
             const FlyBody::SegmentPose& sp = pose[static_cast<std::size_t>(l) * kJointCount + j];
             const V3 delta = sp.b - sp.a;
-            const float len = length(delta);
+            // The tarsus is five tarsomeres, not one rod. The skeleton still
+            // describes it as a single segment -- that keeps the rest-pose
+            // solver, the motor map and every l*kJointCount + j index working
+            // -- and the physics splits it here. The TiTa motor joint drives
+            // the first tarsomere, so the motor pool still moves the foot;
+            // the rest follow on passive, compliant hinges.
+            const bool isTarsus = (j == kJointCount - 1);
+            const float fullLen = length(delta);
+            const float len =
+                isTarsus ? fullLen * anat::kTarsomereFrac[0] : fullLen;
             const Quat rot = aimDownZ(delta);
 
             RigidBody seg;
@@ -135,21 +159,110 @@ void FlyPhysics::build(const FlyBody& skeleton) {
 
             segments_.push_back({id, len, sp.radius, sp.leg, sp.joint});
 
+            if (isTarsus) {
+                tarsusHead[l].full = fullLen;
+                tarsusHead[l].radius = sp.radius;
+                tarsusHead[l].rot = rot;
+                tarsusHead[l].tip = sp.a + normalise(delta) * len;
+            }
+
             parent = id;
             parentAnchorLocal = {0, 0, -len};
         }
 
-        // The foot: a contact probe at the far tip of the tarsus.
-        const std::uint32_t tarsus = segments_.back().body;
-        world.probes.push_back({tarsus, {0, 0, -segments_.back().length},
-                                segments_.back().radius});
+        // `parent` and `parentAnchorLocal` now refer to ta1, which the main
+        // loop left them pointing at.
+        tarsusHead[l].body = parent;
+        tarsusHead[l].anchor = parentAnchorLocal;
+    }
+
+    // --- tarsomeres 2..5 -------------------------------------------------
+    //
+    // Passive. A fly's individual tarsomeres have no motor neurons of their
+    // own -- the motor map has one TiTa pool per leg and nothing below it --
+    // and the foot works by draping over whatever it lands on. So these get
+    // a weak servo back toward straight and a short range, which is what
+    // makes the foot compliant instead of a spike.
+    for (int l = 0; l < kLegCount; ++l) {
+        std::uint32_t parent = tarsusHead[l].body;
+        V3 anchor = tarsusHead[l].anchor;
+        const Quat rot = tarsusHead[l].rot;
+        V3 tip = tarsusHead[l].tip;
+        const float radius = tarsusHead[l].radius;
+
+        for (int t = 1; t < anat::kTarsomereCount; ++t) {
+            const float len = tarsusHead[l].full * anat::kTarsomereFrac[t];
+            const V3 dir = rot.rotate({0, 0, -1});
+
+            RigidBody seg;
+            seg.position = tip;
+            seg.orientation = rot;
+            const float mass = std::max(params.minTarsomereMass,
+                                        len * 40.0f * params.segmentMassScale);
+            // Tarsomeres taper toward the claw.
+            const float r = radius * (1.0f - 0.10f * static_cast<float>(t));
+            seg.setCapsuleInertia(mass, std::max(r, 0.014f), len);
+            const std::uint32_t id = world.addBody(seg);
+
+            HingeJoint hj;
+            hj.a = parent;
+            hj.b = id;
+            hj.anchorA = anchor;
+            hj.anchorB = {0, 0, 0};
+            const V3 worldAxis =
+                world.bodies[parent].orientation.rotate({0, 1, 0});
+            const M3 ra = M3::fromQuat(world.bodies[parent].orientation);
+            const M3 rb = M3::fromQuat(rot);
+            hj.axisA = ra.transposed() * worldAxis;
+            hj.axisB = rb.transposed() * worldAxis;
+            hj.maxTorque = params.postureTorque * params.tarsusStiffness;
+            hj.servoRate = params.servoRate;
+            hj.damping = params.jointDamping;
+            hj.minAngle = -params.tarsusRangeRad;
+            hj.maxAngle = params.tarsusRangeRad;
+            world.joints.push_back(hj);
+
+            segments_.push_back({id, len, r, static_cast<LegId>(l),
+                                 Joint::TiTa});
+            footSegment_[l] = static_cast<std::uint32_t>(segments_.size() - 1);
+
+            tip = tip + dir * len;
+            parent = id;
+            anchor = {0, 0, -len};
+        }
+
+        // The foot: a contact probe at the tip of the last tarsomere. Probes
+        // are pushed in leg order, so probe index still equals leg index and
+        // footLoad() is unaffected.
+        const SegmentRef& last = segments_[footSegment_[l]];
+        world.probes.push_back({last.body, {0, 0, -last.length}, last.radius});
     }
 
     // The trunk needs contacts too, or a collapse takes the body straight
     // through the floor instead of resting on it.
-    world.probes.push_back({thorax_, {0.0f, 0, -0.28f}, 0.05f});
-    world.probes.push_back({abdomen_, {-0.2f, 0, -0.24f}, 0.05f});
-    world.probes.push_back({head_, {0.0f, 0, -0.19f}, 0.05f});
+    // Placed on each part's underside, so they follow the anatomy rather
+    // than being re-tuned by hand whenever the body changes shape.
+    world.probes.push_back({thorax_, {0.0f, 0, -anat::kThoraxHalf.z}, 0.05f});
+    world.probes.push_back({abdomen_, {-0.2f, 0, -anat::kAbdomenHalf.z}, 0.05f});
+    world.probes.push_back({head_, {0.0f, 0, -anat::kHeadHalf.z}, 0.05f});
+
+    // The tarsus now has five segments and, until here, one contact point at
+    // the very tip. That would have made a jointed foot sink through the
+    // floor more visibly than the single rod it replaced, so each tarsomere
+    // gets its own probe. They go after the trunk probes, leaving the first
+    // kLegCount probe indices as the foot tips in leg order.
+    probeLeg_.assign(world.probes.size(), -1);
+    for (int l = 0; l < kLegCount; ++l) probeLeg_[l] = l;
+    for (int l = 0; params.tarsusProbes && l < kLegCount; ++l) {
+        const std::uint32_t last = footSegment_[l];
+        const std::uint32_t first = last - (anat::kTarsomereCount - 2);
+        for (std::uint32_t k = first; k < last; ++k) {
+            const SegmentRef& sref = segments_[k];
+            world.probes.push_back({sref.body, {0, 0, -sref.length},
+                                    sref.radius});
+            probeLeg_.push_back(l);
+        }
+    }
 
     world.prepare();
     for (int l = 0; l < kLegCount; ++l) legSpanRest_[l] = legSpan(l);
@@ -170,9 +283,17 @@ float FlyPhysics::legSpan(int leg) const {
 float FlyPhysics::footLoad(int leg) const {
     float load = 0.0f;
     for (const auto& c : world.contacts) {
-        if (c.probe == static_cast<std::uint32_t>(leg)) load += c.normalImpulse;
+        if (c.probe < probeLeg_.size() && probeLeg_[c.probe] == leg) {
+            load += c.normalImpulse;
+        }
     }
     return load;
+}
+
+V3 FlyPhysics::footPosition(int leg) const {
+    const SegmentRef& s = segments_[footSegment_[leg]];
+    const RigidBody& b = world.bodies[s.body];
+    return b.position + b.orientation.rotate({0, 0, -s.length});
 }
 
 void FlyPhysics::reset(const FlyBody& skeleton) {

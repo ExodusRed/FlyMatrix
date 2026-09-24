@@ -19,7 +19,9 @@ BODY_Z = 0.62
 BODY_RADIUS = 0.38
 GROUND_Z = 0.0
 
-SEG = dict(coxa=0.26, troch=0.08, femur=0.52, tibia=0.48, tarsus=0.50)
+# Mirrors src/body/Anatomy.h. If these disagree the solved rest pose is
+# for a different animal than the one that gets built.
+SEG = dict(coxa=0.26, troch=0.09, femur=0.54, tibia=0.50, tarsus=0.55)
 
 LEGS = [
     # name, attachX, lengthScale, target foot (x, y, z) for the LEFT leg,

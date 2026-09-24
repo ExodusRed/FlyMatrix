@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "body/Anatomy.h"
 #include "body/FlyBody.h"
 #include "body/MotorPools.h"
 #include "engine/Physics.h"
@@ -18,12 +19,15 @@ namespace fly {
 class FlyPhysics {
 public:
     struct Params {
-        float thoraxMass = 400.0f;   // micrograms; a fly is about 1 mg
-        float abdomenMass = 350.0f;
+        // Trunk mass and geometry come from body/Anatomy.h, which is the
+        // single sourced description of the animal. They used to be literals
+        // here and again in the renderer, which is how the two drifted apart.
+        float thoraxMass = anat::kThoraxMass;   // micrograms; a fly is ~1 mg
+        float abdomenMass = anat::kAbdomenMass;
         // How far behind the thorax centre the abdomen sits. It overhangs
         // the hind legs, so this is a lever arm on the body's pitch.
-        float abdomenOffsetX = -0.78f;
-        float headMass = 90.0f;
+        float abdomenOffsetX = anat::kAbdomenX;
+        float headMass = anat::kHeadMass;
 
         // Anatomical leg segments would weigh a fraction of a microgram, which
         // against a 400 ug thorax is a mass ratio of thousands to one -- the
@@ -31,7 +35,54 @@ public:
         // legs and jitter. Segments are floored well above their true mass.
         // This trades physical accuracy for a solver that stays together, and
         // it is the single most important number here.
+        // The tarsomeres below the TiTa joint have no motor neurons of
+        // their own, so they are passive: a weak servo back toward straight
+        // and a short range, which is what lets the foot drape over the
+        // ground instead of meeting it as a single rigid spike.
+        //
+        // Stiffness is a fraction of postureTorque. Measured: the fly stands
+        // from 0.3 upward, but walking needs 1.0 -- at 0.35 the foot is too
+        // floppy and the gait tips the body to 77 degrees of pitch.
+        //
+        // Be clear about what this buys at the shipped value. Results are
+        // identical from 1.0 to 20.0, which means the servo is holding the
+        // tarsomeres straight and the chain is behaving near-rigidly while
+        // walking. The articulation is anatomically right and the compliance
+        // is real below 1.0, but the fly cannot yet walk in that regime, so
+        // what ships is a jointed tarsus that mostly acts like a stiff one.
+        float tarsusStiffness = 1.0f;
+        float tarsusRangeRad = 0.45f;
+
+        // A contact probe on every tarsomere rather than only the foot tip.
+        //
+        // Off, and it should be on -- this is the honest state of it. A real
+        // fly's tarsus lies *along* the ground rather than touching at a
+        // point, so probing each tarsomere is what the anatomy calls for. But
+        // the rest pose was solved to put a single point foot on the floor,
+        // which leaves the rest of a now-jointed tarsus below it; switching
+        // the probes on pushes the body up to 0.94 mm from 0.55 and leaves
+        // one foot down. Making this work needs the rest pose re-solved
+        // against a segmented foot, which is the leg-clipping work and not
+        // this change.
+        bool tarsusProbes = false;
+
         float minSegmentMass = 12.0f;
+        // Tarsomeres get their own floor, and it is the same as the rest.
+        //
+        // The reasoning for lowering it was that a huge mass ratio between
+        // neighbours is what an iterative solver handles worst, and that this
+        // applies to a coxa hanging off a 330 ug thorax but not between one
+        // tiny tarsomere and the next. The measurement disagreed: at 4 ug the
+        // legs go rubbery and the fly sags to 0.447 mm, at 8 to 0.513, and it
+        // only stands from 10 upward -- which saves 48 ug and no margin.
+        //
+        // This is the model's largest physical inaccuracy and it is worth
+        // stating plainly. 54 leg segments floored at 12 ug give 754 ug of
+        // leg against a 740 ug trunk, so the fly masses 1494 ug where a real
+        // one is about 1000 and its legs are perhaps 8% of it. The floor is a
+        // solver-stability number, not an anatomical one, and it dominates
+        // the animal.
+        float minTarsomereMass = 12.0f;
         float segmentMassScale = 1.0f;
 
         // Torque produced by a postural muscle at full activation. Individual
@@ -53,7 +104,12 @@ public:
         // 0.58 mm stance, against roughly 4.6 mm ballistic for a real
         // Drosophila taking off at 0.3 m/s. The usable window is narrow and
         // not monotonic: 4e5 and 6e5 both diverge sooner than this does.
-        float maxMuscleTorque = 5.0e5f;    // ug*mm^2/s^2
+        // Recalibrated against the corrected solver and the new anatomy.
+        // At 3e6 the giant fibre jump peaks at 4.35 mm against a real
+        // escape takeoff of about 4.6 mm ballistic. The old 5e5 was set
+        // when the joint-limit constraint was amplifying every impulse 64
+        // times, and it produced 0.79 mm once that was fixed.
+        float maxMuscleTorque = 3.0e6f;    // ug*mm^2/s^2
         // Torque budget a joint can spend holding its posture. This is a
         // bound on an impulse, not a spring gain, so it can be raised freely
         // without threatening the integrator.
@@ -186,6 +242,8 @@ public:
 
     // Straight-line distance from the leg's attachment to its foot.
     float legSpan(int leg) const;
+    // World position of a leg's foot: the tip of its last tarsomere.
+    V3 footPosition(int leg) const;
     // The same distance in the pose the body was built in.
     float legSpanRest(int leg) const { return legSpanRest_[leg]; }
     // Normal impulse currently carried by this leg's foot, 0 if airborne.
@@ -210,6 +268,16 @@ private:
 
     std::uint32_t thorax_ = 0, abdomen_ = 0, head_ = 0;
     std::vector<SegmentRef> segments_;
+    // Index into segments_ of each leg's most distal tarsomere -- the part
+    // that actually touches the ground. The first kLegCount*kJointCount
+    // entries of segments_ keep their old layout so every l*kJointCount + j
+    // index still means what it did; the extra tarsomeres live past them.
+    std::array<std::uint32_t, kLegCount> footSegment_{};
+    // Which leg each contact probe belongs to, -1 for the trunk. The first
+    // kLegCount probes are still the foot tips in leg order, so probe index
+    // equals leg index there and the feet-down count is unchanged; this maps
+    // the extra tarsomere probes back to their leg.
+    std::vector<int> probeLeg_;
     // Joint index in world.joints for each [leg][joint].
     std::array<std::array<std::uint32_t, kJointCount>, kLegCount> jointIndex_{};
     std::array<std::array<float, kJointCount>, kLegCount> restAngle_{};

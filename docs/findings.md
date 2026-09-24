@@ -836,3 +836,128 @@ The reflex sign is now an explicit parameter, `SensoryOrgans::Params::
 reflexSign`, rather than an accident of the code. +1 is resistance, which is the
 standing case; -1 is the assistance reflex that the same anatomy implements
 during walking.
+
+
+---
+
+## 11. An anatomy audit, and what the model was missing
+
+The body was assembled from plausible-looking numbers rather than from the
+literature, and three copies of it existed: leg geometry in `FlyBody`, masses
+and collision extents in `FlyPhysics`, and what actually gets drawn in
+`body_main`. They could disagree, and they did -- the renderer drew the trunk
+from a transform the physics never wrote to.
+
+Everything now lives in `src/body/Anatomy.h`, and each block says whether its
+numbers are **measured** (published measurements of real flies),
+**proportional** (a measured total divided by published ratios), or
+**estimated** (nobody measured it for us).
+
+### What was wrong
+
+| part | real fly | had | status |
+|------|----------|-----|--------|
+| tarsus | **five tarsomeres** ta1-ta5 plus a pretarsus with claws | one rigid rod | fixed |
+| wings | two, about as long as the body | none | added |
+| halteres | two, the fly's gyroscopes | none | added |
+| proboscis | rostrum, haustellum, labellum | none | added |
+| antennae | pedicel, funiculus, arista | none | added |
+| body length | 2.5-3 mm | 2.04 mm | 2.50 mm |
+| coxa/femur/tibia | -- | -- | already about right |
+
+The leg *proportions* turned out to be close: coxa 0.26, femur 0.52, tibia
+0.48 needed only small adjustments. The error was the tarsus. A fly's foot is
+a jointed chain that drapes over what it stands on, and we had a spike.
+
+### The tarsus, and why it is only half fixed
+
+The five tarsomeres are in, below the TiTa joint. They are **passive**, which
+is right: the motor map has one TiTa pool per leg and nothing below it, so
+individual tarsomeres have no motor neurons of their own. The TiTa joint drives
+ta1 and the rest follow on compliant hinges.
+
+The skeleton still describes the tarsus as one segment, so the rest-pose
+solver, the motor map and every `l * kJointCount + j` index keep working, and
+`FlyPhysics` splits it during build. 33 bodies became 57.
+
+Two honest caveats.
+
+**The compliance barely acts at the shipped stiffness.** Results are identical
+from 1.0 to 20.0, meaning the servo holds the tarsomeres straight and the chain
+behaves near-rigidly while walking. Below 1.0 the compliance is real and the
+fly cannot walk: at 0.35 the gait tips it to 77 degrees of pitch. So what ships
+is an articulated tarsus that mostly acts like a stiff one.
+
+**Only the tip has a contact probe.** A real tarsus lies *along* the ground
+rather than touching at a point, so probing every tarsomere is what the anatomy
+calls for, and `tarsusProbes` does it. It is off, because the rest pose was
+solved to put a single point foot on the floor, which leaves the rest of a
+jointed tarsus below it -- switching the probes on pushes the body from 0.55 mm
+to 0.94 and leaves one foot down. Making that work needs the rest pose
+re-solved against a segmented foot. That is the leg-clipping problem, still
+open.
+
+### What the new geometry did to the physics
+
+```
+                        before      after
+standing height        0.5711 mm   0.5283 mm
+standing body pitch    +0.79 deg   +0.01 deg
+imposed tripod         3.74 mm/s   11.47 mm/s
+giant fibre jump        7.20 mm     4.35 mm
+```
+
+The pitch is the satisfying one: with the legs re-solved for their true lengths
+the fly stands level rather than nose-up.
+
+The gait tripled and is now inside the real range of 10-25 mm/s, at a 40 ms
+period. The sweet spot moved with the geometry -- at the old 60 ms period the
+new body does 1.87 mm/s -- which is a reminder that the gait numbers are a
+property of body and pattern together, not of the body alone.
+
+The jump had to be recalibrated, and lands better than before: 4.35 mm against
+a real escape takeoff of about 4.6 mm ballistic, at `maxMuscleTorque` 3e6.
+Specificity is untouched, with Kenyon cells and APL at exactly 0.6200 mm.
+
+### The model's largest physical inaccuracy
+
+The fly masses **1494 ug where a real one is about 1000**, and its legs are
+754 ug of that where a real fly's are perhaps 8% of its body.
+
+This is `minSegmentMass`, a solver-stability floor. A huge mass ratio between
+neighbouring bodies is what an iterative solver handles worst, so leg segments
+are floored well above their true mass. Splitting the tarsus into five took the
+leg count from 30 segments to 54 and the floor now dominates the animal.
+
+Lowering it for tarsomeres specifically was tried, on the reasoning that the
+ratio argument applies to a coxa hanging off a 330 ug thorax but not between
+one tiny tarsomere and the next. The measurement disagreed:
+
+```
+floor    total mass    standing height
+  4 ug      1302 ug      0.447 mm   FAIL
+  8 ug      1398 ug      0.513 mm   FAIL
+ 10 ug      1446 ug      0.521 mm   pass
+ 12 ug      1494 ug      0.528 mm   pass
+```
+
+It only stands from 10 upward, which saves 48 ug and no margin. The floor
+stays, and this is the number to distrust most in the model.
+
+### Sources
+
+- [Appendometer: high-throughput morphometry of Drosophila legs and wings, bioRxiv 2025](https://www.biorxiv.org/content/10.1101/2025.01.21.634122v1.full)
+- [An anatomical atlas of Drosophila melanogaster -- the wild-type, Genetics 2024](https://academic.oup.com/genetics/article/228/2/iyae129/7750380)
+- [A leg model based on anatomical landmarks for 3D joint kinematics of walking, PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC11233710/)
+- [The NeuroMechFly model -- body parts and degrees of freedom](https://nely-epfl.github.io/flygym-gymnasium/neuromechfly.html)
+- [Subdivision of the tarsal region into five tarsal segments, Cytologia 2019](https://www.jstage.jst.go.jp/article/cytologia/84/2/84_840202/_html/-char/en)
+- [Drosophila melanogaster, Animal Diversity Web](https://animaldiversity.org/accounts/Drosophila_melanogaster/)
+
+### Still simplified
+
+The abdomen is one ellipsoid where a fly has six segments. The head does not
+articulate on the neck. The thorax-coxa joint is a single hinge plus a fixed
+mount, where the real joint is a ball-and-socket with three degrees of freedom
+(yaw, pitch, roll). The proboscis is drawn retracted and cannot extend, so the
+fly has mouthparts but still cannot feed. Wings and halteres are drawn and
+carry no mass and do not articulate.

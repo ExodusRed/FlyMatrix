@@ -67,6 +67,8 @@ int g_iters = -1;
 float g_baum = -1.0f;
 float g_corr = -1.0f;
 float g_substep = -1.0f;
+float g_tarsus = -1.0f;
+float g_minseg = -1.0f;
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
@@ -76,6 +78,8 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
+    if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
@@ -142,7 +146,13 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
         // behind the thorax, so a few degrees of body pitch shifts it
         // vertically even when the weld is perfectly rigid -- measuring raw
         // z-difference reports that as weld failure.
-        const float abdX = (g_abdX != 0.0f) ? g_abdX : -0.78f;
+        // Read the offset the body was actually built with. This used to
+        // be a literal -0.78, and when the anatomy moved the abdomen to
+        // -0.86 the test reported the 0.08 mm difference as weld slip. The
+        // weld was fine. Comparing against a number the model no longer
+        // uses is how this file previously invented 79 um of slip that
+        // turned out to be body pitch.
+        const float abdX = (g_abdX != 0.0f) ? g_abdX : phys.params.abdomenOffsetX;
         const V3 expected = th.position + th.orientation.rotate({abdX, 0, -0.04f});
         r.trunkDrop = length(ab.position - expected);
         // Pitch: how far the thorax's forward axis has tilted out of level.
@@ -185,6 +195,8 @@ int traceOne(const std::string& jointName_, float drive) {
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
+    if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = joint;
@@ -232,6 +244,8 @@ int gaitTest(float periodMs, float amplitude) {
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
+    if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     phys.params.useManualTarget = true;
     phys.build(skeleton);
     if (g_iters > 0) phys.world.params.iterations = g_iters;
@@ -330,6 +344,12 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--substep") == 0) {
             g_substep = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--tarsus") == 0) {
+            g_tarsus = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--minseg") == 0) {
+            g_minseg = std::stof(argv[i + 1]);
+        }
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--stand-only") == 0) g_standOnly = true;
@@ -340,7 +360,7 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gait") == 0) {
-            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 60.0f;
+            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 40.0f;
             // Radians of ThC swing, not an abstract drive number.
             const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.3f;
             return gaitTest(periodMs, amp);
