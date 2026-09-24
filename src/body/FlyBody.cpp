@@ -39,19 +39,24 @@ struct LegLayout {
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
 constexpr LegLayout kLayout[kLegCount] = {
-    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, {-0.803f, -1.401f, -0.073f,  1.746f, 0.938f}},
-    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, {-0.803f, -1.401f, -0.073f,  1.746f, 0.938f}},
-    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, {-0.567f, -1.217f, -0.011f,  2.320f, 0.491f}},
-    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, {-0.567f, -1.217f, -0.011f,  2.320f, 0.491f}},
-    // All six legs now fold the same way -- CTr negative, FTi positive -- and
+    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, { 0.049f, -1.538f, -0.115f,  2.129f, -2.219f}},
+    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, { 0.049f, -1.538f, -0.115f,  2.129f, -2.219f}},
+    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, { 0.025f, -0.588f, -0.051f,  2.143f, -0.068f}},
+    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, { 0.025f, -0.588f, -0.051f,  2.143f, -0.068f}},
+    // Solved so the tarsus lies flat along the ground rather than touching
+    // at its tip, which is what the five tarsomeres are for. The front
+    // tarsus points forward and the hind one trails back, as a real fly's
+    // do; forcing them all one way jams a leg against its TiTa limit.
+    //
+    // All six legs fold the same way -- CTr negative, FTi positive -- and
     // reach fore and aft with ThC instead. The rest-pose solver picks that
     // configuration once for the whole animal and scores it 83x better than
     // the next best, so the legs agreeing is not a constraint imposed against
     // the geometry's wishes; it is what the geometry prefers once ThC is free
     // to swing. The ThC gradient across the leg pairs, -0.841 front to -0.061
     // hind, is what used to be faked by folding the front legs backwards.
-    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, {-0.111f, -0.677f,  0.008f,  2.167f, 0.397f}},
-    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, {-0.111f, -0.677f,  0.008f,  2.167f, 0.397f}},
+    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, { 0.434f, -0.188f, -0.017f,  1.672f, -0.367f}},
+    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, { 0.434f, -0.188f, -0.017f,  1.672f, -0.367f}},
 };
 
 // Segment lengths for a middle leg, in millimetres, scaled per leg above.
@@ -142,7 +147,9 @@ FlyBody::FlyBody() {
         // same local lateral axis.
         leg.joints[3] = {kLeft, L.rest[3], -2.6f, 2.6f, kTibiaLen * s, 0.028f};
         // TiTa is the ankle, bending the same way but less.
-        leg.joints[4] = {kLeft, L.rest[4], -1.2f, 1.5f, kTarsusLen * s, 0.020f};
+        // Widened from -1.2: laying the tarsus flat on a trailing hind leg
+        // needs more range than that, and it jammed against the limit.
+        leg.joints[4] = {kLeft, L.rest[4], -2.3f, 2.3f, kTarsusLen * s, 0.020f};
     }
     resetPose();
     root.position = {0, 0, 0.62f};

@@ -111,11 +111,20 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     r.anchorError = phys.world.maxAnchorError();
     r.feetDown = 0;
     r.thoraxDown = r.abdomenDown = r.headDown = false;
-    for (const auto& c : phys.world.contacts) {
-        if (c.probe < static_cast<std::uint32_t>(kLegCount)) ++r.feetDown;
-        else if (c.probe == phys.thoraxProbe()) r.thoraxDown = true;
-        else if (c.probe == phys.abdomenProbe()) r.abdomenDown = true;
-        else if (c.probe == phys.headProbe()) r.headDown = true;
+    {
+        // A leg is down if *any* of its probes touches, not only the one at
+        // the very tip. With the tarsus lying flat along the ground a leg
+        // commonly rests on its middle tarsomeres, and counting tip probes
+        // alone reported a standing fly as having four feet down.
+        bool legDown[kLegCount] = {};
+        for (const auto& c : phys.world.contacts) {
+            const int l = phys.probeLeg(c.probe);
+            if (l >= 0) legDown[l] = true;
+            else if (c.probe == phys.thoraxProbe()) r.thoraxDown = true;
+            else if (c.probe == phys.abdomenProbe()) r.abdomenDown = true;
+            else if (c.probe == phys.headProbe()) r.headDown = true;
+        }
+        for (const bool d : legDown) if (d) ++r.feetDown;
     }
     {
         // How far the front-left foot has slid from where it started.
@@ -241,7 +250,7 @@ int traceOne(const std::string& jointName_, float drive) {
 // hind-left swing together while the other three are in stance. Within a leg,
 // ThC retracts through stance to push the body forward, and during swing CTr
 // lifts the foot clear while ThC protracts to reset it.
-int gaitTest(float periodMs, float amplitude, float lift) {
+int gaitTest(float periodMs, float amplitude, float lift, float toeLift) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
@@ -296,13 +305,27 @@ int gaitTest(float periodMs, float amplitude, float lift) {
             // feet stayed planted and the fly shuffled backwards.
             phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
                 (c > 0.0f) ? lift * c : 0.0f;
+            // Curl the tarsus during swing.
+            //
+            // A point foot can be planted and lifted straight up. A tarsus
+            // lying flat along the ground cannot: lifting it at the ankle
+            // alone leaves the far end dragging, which is the toe catching on
+            // every step. A real fly rolls the foot, and the tarsus has to
+            // come up with the leg.
+            phys.params.manualTarget[l][static_cast<int>(Joint::TiTa)] =
+                (c > 0.0f) ? toeLift * c : 0.0f;
         }
         phys.step(kDt);
         const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
         const float pitch = std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f;
         worstPitch = std::max(worstPitch, std::fabs(pitch));
-        for (const auto& c : phys.world.contacts) {
-            if (c.probe < static_cast<std::uint32_t>(kLegCount)) contactSum += 1.0f;
+        {
+            bool legDown[kLegCount] = {};
+            for (const auto& c : phys.world.contacts) {
+                const int l = phys.probeLeg(c.probe);
+                if (l >= 0) legDown[l] = true;
+            }
+            for (const bool d : legDown) if (d) contactSum += 1.0f;
         }
         {
             const int probe = static_cast<int>(LegId::MiddleL);
@@ -404,9 +427,9 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gait") == 0) {
-            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 30.0f;
+            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 45.0f;
             // Radians of ThC swing, not an abstract drive number.
-            const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.3f;
+            const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.2f;
             // Lift defaults well above the swing amplitude. Tied to it at
             // 0.6 * amp the swing legs never cleared the ground and the fly
             // scuffed along at a duty factor of 0.77.
@@ -421,8 +444,15 @@ int main(int argc, char** argv) {
             // 12.8 degrees of pitch to 43.5.
             const float lift = (i + 3 < argc && argv[i + 3][0] != '-')
                                    ? std::stof(argv[i + 3])
-                                   : 0.7f;
-            return gaitTest(periodMs, amp, lift);
+                                   : 0.5f;
+            // Chosen for staying upright, not for speed. With a flat tarsus
+            // the fast settings all tumble: 26.8 mm/s at 87 degrees of pitch,
+            // 38.7 at 66. This is the quickest gait in the sweep that keeps
+            // pitch under 20.
+            const float toe = (i + 4 < argc && argv[i + 4][0] != '-')
+                                  ? std::stof(argv[i + 4])
+                                  : 0.4f;
+            return gaitTest(periodMs, amp, lift, toe);
         }
     }
 

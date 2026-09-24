@@ -55,16 +55,17 @@ public:
 
         // A contact probe on every tarsomere rather than only the foot tip.
         //
-        // Off, and it should be on -- this is the honest state of it. A real
-        // fly's tarsus lies *along* the ground rather than touching at a
-        // point, so probing each tarsomere is what the anatomy calls for. But
-        // the rest pose was solved to put a single point foot on the floor,
-        // which leaves the rest of a now-jointed tarsus below it; switching
-        // the probes on pushes the body up to 0.94 mm from 0.55 and leaves
-        // one foot down. Making this work needs the rest pose re-solved
-        // against a segmented foot, which is the leg-clipping work and not
-        // this change.
-        bool tarsusProbes = false;
+        // On, now that the rest pose lays the tarsus flat. A real fly's
+        // tarsus lies *along* the ground, which is what its five tarsomeres
+        // and its adhesive pads are for, so a single point probe at the tip
+        // was both wrong and the reason legs appeared to pass through the
+        // floor -- nothing else on the leg was ever tested against it.
+        //
+        // This could not be switched on before: the rest pose put a point
+        // foot on the floor, which left the rest of a jointed tarsus below
+        // it, and enabling the probes pushed the body from 0.55 mm to 0.94
+        // and left one foot down.
+        bool tarsusProbes = true;
 
         // Lowered from 12 once the rest pose was re-solved for the new leg
         // lengths: at 12 the fly could not lift a swing leg without falling,
@@ -137,6 +138,10 @@ public:
         // 2.7e6 is one sample that happens to land near the animal. Its
         // neighbours give 3.21 and 9.77. Choosing it because 4.43 looks right
         // would be fitting to noise, so it is chosen and labelled instead.
+        //
+        // Those numbers were measured against the previous rest pose. After
+        // the tarsus was laid flat the same 2.7e6 gives 9.96 mm instead of
+        // 4.43, which makes the point better than the table does.
         //
         // The model cannot currently produce a reproducible escape jump of a
         // given height. That is a real limitation, not a tuning problem.
@@ -275,6 +280,10 @@ public:
     float legSpan(int leg) const;
     // World position of a leg's foot: the tip of its last tarsomere.
     V3 footPosition(int leg) const;
+    // Which leg a contact probe belongs to, -1 for the trunk.
+    int probeLeg(std::uint32_t probe) const {
+        return probe < probeLeg_.size() ? probeLeg_[probe] : -1;
+    }
     // The same distance in the pose the body was built in.
     float legSpanRest(int leg) const { return legSpanRest_[leg]; }
     // Normal impulse currently carried by this leg's foot, 0 if airborne.

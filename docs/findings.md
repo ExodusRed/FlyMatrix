@@ -1088,3 +1088,117 @@ substep across 57 bodies, plus 176,422 LIF neurons at 10 kHz. Neither has been
 optimised at all -- there is no spatial partitioning, no SIMD, no threading,
 and the substep rate was set by what kept the solver stable rather than by what
 it needs.
+
+
+---
+
+## 13. The legs stopped clipping through the floor, and walking got worse
+
+The reported defect was legs passing through the ground. The cause was not a
+contact bug: **only the foot tip had a contact probe at all**. Nothing else on
+the leg was ever tested against the floor, so a tibia or a mid-tarsus could
+pass straight through it because nothing was asking.
+
+Finding 11 added the five tarsomeres and left this half done, because probing
+each of them pushed the body from 0.55 mm to 0.94 and left one foot down. The
+reason was the rest pose: it had been solved to put a *point* foot on the
+floor, which leaves the rest of a jointed tarsus below it.
+
+### Laying the tarsus flat
+
+A real fly does not stand on the tip of its tarsus. The tarsus lies along the
+substrate -- that is what five tarsomeres and adhesive pads are for.
+
+`solve_rest_pose.py` now solves for the **ankle** rather than the foot. Only
+the first four joints move the ankle, so the search is a 3x4 problem and TiTa
+drops out of it entirely; TiTa is then set analytically to whatever lays the
+tarsus horizontal, which is one equation in one unknown.
+
+Two attempts failed before it worked, and both were the same mistake in
+different places. Forcing every tarsus to point forward jammed the hind leg
+against its TiTa limit and left its tarsus 77 um off the floor. Letting each
+tarsus continue in the direction its own leg is already heading fixed the hind
+leg and jammed the front one instead, at 201 um. Widening TiTa from +/-1.2 to
++/-2.3 and pulling the front stance in from x = 0.72 to 0.62 got all three:
+
+```
+front   ankle (+0.619, +0.700, +0.019)   tarsus tip (+1.103, +0.694, +0.019)
+middle  ankle (-0.150, +0.920, +0.020)   tarsus tip (-0.698, +0.960, +0.020)
+hind    ankle (-1.121, +0.881, +0.019)   tarsus tip (-1.736, +0.897, +0.019)
+
+tarsus rise: 0.0 um on all three
+```
+
+The front tarsus points forward and the hind one trails back, which is what a
+real fly's do. The branch search still picks one joint configuration for the
+whole animal, and still prefers it by a wide margin: 0.0035 against 0.1028.
+
+### Standing is now right
+
+```
+              before        after
+height       0.5215 mm     0.5501 mm
+contacts      6             22
+feet down     6             6
+body pitch   +0.09 deg     -0.09 deg
+```
+
+22 contacts because the tarsomeres are resting on the ground along their
+length, as they should. The legs no longer pass through the floor.
+
+A stale measurement had to be fixed to see this: the harness counted a leg as
+down only if the probe at its very tip was touching, and with the tarsus flat
+a leg commonly rests on its middle tarsomeres. It reported a correctly
+standing fly as having four feet down. Feet are now counted per leg.
+
+### And walking regressed
+
+```
+              point foot    flat tarsus
+speed         17.04 mm/s     8.37 mm/s
+pitch         11.0 deg      18.6 deg
+duty          0.69          0.65
+```
+
+This is a real trade, not a tuning artefact, and it is worth being clear that
+the anatomically correct model walks worse.
+
+A flat foot cannot be planted and lifted straight up the way a point can.
+Lifting at the ankle alone leaves the far end dragging, so the gait needed a
+third joint: TiTa now curls during swing to bring the tarsus up with the leg.
+That works, and it works dramatically -- with the curl the fly reaches
+
+```
+stride 1.204 mm, duty 0.48, speed 26.76 mm/s
+```
+
+which is real *Drosophila* territory on every count; a real fly's stride is
+about 1.3 mm at a duty factor near 0.5. It also pitches to 87 degrees and
+falls over. Across the sweep, every setting that produced a biological stride
+tumbled, and every setting that stayed upright produced a short one. The
+shipped default is the quickest gait that keeps pitch under 20 degrees.
+
+### What that is actually telling us
+
+The flat foot did not make the mechanics worse. It made them more realistic
+and therefore more demanding, and it exposed the limit of what an open-loop
+sine wave can do.
+
+A real fly does not walk by replaying a fixed pattern. It is continuously
+correcting, and the faster it goes the more correction it needs. Our gait has
+no feedback at all: the same six sinusoids play whether the body is level or
+rolling over. With a point foot that was survivable because the foot could not
+catch on anything. With a tarsus lying along the ground it is not.
+
+So the stride is there and the stability is not, and closing that gap is not a
+matter of better sine waves. It wants a controller -- which is what the
+nervous system in this project is supposed to eventually be.
+
+### Note on the jump
+
+The giant fibre now peaks at 9.96 mm where the same `maxMuscleTorque` gave
+4.43 before the pose change. The sampled table in `FlyPhysics.h` was measured
+against the previous rest pose and should be read as illustrating the chaos
+rather than as current values. It is further evidence for finding 12's
+conclusion: the jump height is not a reproducible quantity in this model, and
+anything that perturbs timing moves it.

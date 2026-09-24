@@ -29,7 +29,7 @@ SEG = dict(coxa=0.26, troch=0.09, femur=0.54, tibia=0.50, tarsus=0.55)
 LEGS = [
     # name, attachX, lengthScale, target foot (x, y, z) for the LEFT leg,
     # fixed outward mount tilt (radians, about the fore-aft axis)
-    ("front",  0.34, 0.88, (0.72, 0.72, ANKLE_Z), 0.657),
+    ("front",  0.34, 0.88, (0.62, 0.70, ANKLE_Z), 0.657),
     ("middle", 0.02, 1.00, (-0.15, 0.92, ANKLE_Z), 0.909),
     ("hind",  -0.30, 1.12, (-1.12, 0.88, ANKLE_Z), 0.893),
 ]
@@ -59,7 +59,7 @@ LIMITS = np.array([
     [-1.6, 1.6],
     [-0.9, 0.9],
     [-2.6, 2.6],
-    [-1.2, 1.5],
+    [-2.3, 2.3],
 ])
 
 JOINT_NAMES = ["ThC", "CTr", "TrF", "FTi", "TiTa"]
@@ -130,9 +130,18 @@ def flat_tarsus_angle(angles, attach, lengths, mount):
     ex = quat_rotate(rot, np.array([-1.0, 0.0, 0.0]))
     # dir(t) = cos(t)*ez + sin(t)*ex; want dir.z == 0.
     t = np.arctan2(-ez[2], ex[2])
-    # Two solutions half a turn apart; take the one pointing forward.
-    if (np.cos(t) * ez + np.sin(t) * ex)[0] < 0:
-        t += np.pi
+    # Two solutions half a turn apart. Take the one that carries on in the
+    # direction the leg is already heading, rather than always pointing
+    # forward: a fly's front tarsi point forward and its hind tarsi trail
+    # back, and forcing them all forward jams the hind leg's TiTa against
+    # its limit and lifts the tarsus 77 um off the floor.
+    ankle, _ = chain(angles, attach, lengths, mount, 4)
+    away = np.array([ankle[0] - attach[0], ankle[1] - attach[1], 0.0])
+    if np.linalg.norm(away) > 1e-9:
+        away = away / np.linalg.norm(away)
+        d = np.cos(t) * ez + np.sin(t) * ex
+        if np.dot(np.array([d[0], d[1], 0.0]), away) < 0:
+            t += np.pi
     return np.arctan2(np.sin(t), np.cos(t))
 
 
