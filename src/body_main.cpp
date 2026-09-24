@@ -270,6 +270,8 @@ int run(int argc, char** argv) {
         else if (a == "--stim-type") stimType = next("--stim-type");
         else if (a == "--stim-body") { stimBody = std::atoll(next("--stim-body").c_str()); stimType.clear(); }
         else if (a == "--epsp") params.epspPerSynapse = std::stof(next("--epsp"));
+        else if (a == "--adapt") params.adaptIncrement = std::stof(next("--adapt"));
+        else if (a == "--tau-adapt") params.tauAdapt = std::stof(next("--tau-adapt"));
         else if (a == "--steps") stepsPerFrame = std::atoi(next("--steps").c_str());
         else if (a == "--pulse") pulseMs = std::stof(next("--pulse"));
         else if (a == "--frames") frameLimit = std::atol(next("--frames").c_str());
@@ -436,6 +438,11 @@ int run(int argc, char** argv) {
         const int n = static_cast<int>(dropMs / 1000.0f / physDt);
         float stimLeft = (pulseMs > 0.0f) ? pulseMs : dropMs;
         std::uint32_t spikesThisMs = 0;
+        // Rhythmicity of the probed joint's drive, measured rather than
+        // eyeballed. A tonic signal crosses its own running mean almost
+        // never; an oscillation crosses it twice per cycle, so the crossing
+        // count over a known duration gives a frequency directly.
+        std::vector<float> probeHist[kLegCount];
         for (const auto i : driven) net.setStimulus(i, 200.0f);
 
         std::printf("running %.0f ms: %zu driven neuron(s), physics at %.0f Hz\n",
@@ -511,6 +518,11 @@ int run(int argc, char** argv) {
             // the next step. This is the only place anything flows backwards.
             if (useSensory) sensory.sense(phys, net, 1.0f);
 
+            if (probeIdx >= 0) {
+                for (int l = 0; l < kLegCount; ++l) {
+                    probeHist[l].push_back(pools.drive(l, probeIdx));
+                }
+            }
             if (i % std::max(1, n / 12) == 0 || i == n - 1) {
                 // Coxa-trochanter is where the jump muscle pulls.
                 float ctr = 0.0f, ctrDrive = 0.0f;
@@ -540,6 +552,41 @@ int run(int argc, char** argv) {
                 return 2;
             }
         }
+        // Rhythmicity of the probed joint's drive, measured rather than
+        // eyeballed. A tonic signal crosses its own mean almost never; an
+        // oscillation crosses it twice per cycle, so the crossing count over
+        // a known duration gives a frequency directly.
+        if (probeIdx >= 0 && !probeHist[0].empty()) {
+            std::printf("\nrhythm on %s, per leg:\n",
+                        jointName(static_cast<Joint>(probeIdx)));
+            std::printf("%-10s %10s %10s %10s\n", "leg", "mean", "swing", "Hz");
+            for (int l = 0; l < kLegCount; ++l) {
+                const auto& h = probeHist[l];
+                double sum = 0.0;
+                for (const float v : h) sum += v;
+                const auto mean = static_cast<float>(sum / h.size());
+                float lo = h[0], hi = h[0];
+                for (const float v : h) {
+                    lo = std::min(lo, v);
+                    hi = std::max(hi, v);
+                }
+                // Deadband, so numerical noise around a flat signal is not
+                // counted as an oscillation.
+                const float dead = 0.05f * std::max(hi - lo, 1e-6f);
+                int crossings = 0, sign = 0;
+                for (const float v : h) {
+                    const float d = v - mean;
+                    const int sgn = (d > dead) ? 1 : (d < -dead ? -1 : 0);
+                    if (sgn != 0 && sign != 0 && sgn != sign) ++crossings;
+                    if (sgn != 0) sign = sgn;
+                }
+                const float secs = static_cast<float>(h.size()) * physDt;
+                std::printf("%-10s %10.3f %10.3f %10.2f\n",
+                            legName(static_cast<LegId>(l)), mean, hi - lo,
+                            0.5f * static_cast<float>(crossings) / secs);
+            }
+        }
+
         std::printf("\nfinal %.4f mm, peak %.4f mm, peak joint rate %.0f rad/s\n",
                     phys.bodyHeight(), phys.peakHeight(), phys.peakJointRate());
         // Physical cross-check. Units are micrograms, millimetres and seconds,

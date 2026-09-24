@@ -1284,3 +1284,100 @@ rather than one two-second run.
 What is not in doubt is that the mechanism is the right one and the model needs
 it. An open-loop pattern cannot walk this body quickly and stay upright, and no
 amount of better sine waves will change that.
+
+
+---
+
+## 15. Spike-frequency adaptation does not make a gait
+
+Finding 9 established that MDN produces a sustained posture and no rhythm, and
+that no reciprocal inhibition is detectable between the ThC antagonist premotor
+pools. The obvious remaining candidate was a mechanism already in the model:
+spike-frequency adaptation.
+
+It is the standard way a population makes a rhythm out of tonic drive without a
+half centre. Neurons fatigue, the population falls silent, the fatigue decays,
+it fires again. Our LIF neurons have it -- each spike raises that neuron's own
+threshold by `adaptIncrement`, decaying with `tauAdapt` -- so this was a
+question about parameter values rather than about adding machinery.
+
+### Measuring rhythm instead of eyeballing it
+
+`flybody --probe-joint` now reports, per leg, the mean drive, its full swing,
+and a frequency taken from how often the signal crosses its own mean with a 5%
+deadband. A tonic signal crosses almost never; an oscillation crosses twice per
+cycle.
+
+At the shipped adaptation, driving MDN:
+
+```
+leg              mean      swing         Hz
+front_L        -3.755      5.784      21.87
+front_R        -3.885      7.513      10.00
+middle_L       -2.903      8.725       5.62
+middle_R       -0.083     10.706       6.87
+hind_L          1.382      9.890       4.37
+hind_R          4.556      8.484       7.50
+```
+
+The drive is not flat -- swings of 5.8 to 10.7 are large against means of the
+same order. But every leg does something different, between 4.4 and 21.9 Hz,
+and a gait is six legs at **one** frequency in fixed phase.
+
+### No setting synchronises them
+
+Sweeping adaptation strength and time constant, and reporting the mean
+frequency across the six legs with its spread:
+
+```
+adapt  tau      meanHz     sdHz    swing
+0.4    150        9.37     5.85     8.52
+0.4    60         7.60     2.76     8.77
+0.4    30         6.45     2.97     9.20
+1.5    150        8.23     5.36     8.25
+1.5    60        10.31     8.63     8.02
+1.5    30        13.12     9.90     9.02
+4.0    150        9.16     5.91     5.81
+4.0    60        13.33     9.72     6.37
+4.0    30        16.14     7.35     6.46
+```
+
+The spread is comparable to the mean everywhere. The best case, 0.4 mV with a
+60 ms constant, still has a standard deviation more than a third of the mean.
+Stronger and faster adaptation raises the frequency and makes the spread worse,
+not better.
+
+**Adaptation alone does not produce a coordinated gait in this network.** It
+makes the output fluctuate faster; it never makes the six legs agree.
+
+That is what should have been expected on reflection, and it agrees with
+finding 9 from the other direction. Adaptation is a property of individual
+cells and can make a population burst. Coordinating six limbs in fixed phase
+needs *coupling* between them, and the premotor connectivity measurement found
+no sign of the coupling a half centre would need. Two independent lines of
+evidence, one from the wiring and one from the dynamics, land in the same
+place.
+
+### A caveat on the metric
+
+Crossing rate cannot fully separate an oscillation from a noisy tonic signal,
+since a noisy signal also crosses its mean. The deadband suppresses small
+noise but not large. So the frequencies above should be read as "how fast the
+drive fluctuates", not as established oscillation.
+
+It does not change the conclusion. Whether the fluctuation is rhythm or noise,
+it is not synchronised across legs, and an unsynchronised signal is not a gait
+either way.
+
+### Where the rhythm has to come from, then
+
+Three candidates are now ruled out or measured as insufficient: the bulk
+premotor connectivity has no detectable half centre (finding 9), tonic drive
+through it produces posture (finding 9), and cellular adaptation produces
+incoherent fluctuation (here).
+
+What is left is coupling that the connectome does contain but our model does
+not use well -- the intersegmental interneurons that finding 1 noted club
+chordotonal neurons project to heavily -- or sensory feedback, which in insects
+is substantially what coordinates stepping, and which this model cannot yet run
+stably (finding 10). Both routes lead back to the sensorimotor loop.
