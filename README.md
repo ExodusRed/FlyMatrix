@@ -479,8 +479,11 @@ floor and made broad activation stronger -- see
 ```sh
 flyphys --gait                 # imposed tripod, mechanics only
 flyphys --gait 60 0.3          # period in ms, ThC swing in radians
+flybody --gait 60 --pulse 0 --stim-type KC    # watch it walk in 3D
+flybody --drop 2000 --gait 60 --pulse 0 --stim-type KC   # and measure it
 flybody --drop 400 --stim-type MDN --pulse 0 --probe-joint ThC
 python tools/cpg_probe.py --joint ThC --leg middle_L
+python tools/feco_split.py --all-legs
 ```
 
 The body walks:
