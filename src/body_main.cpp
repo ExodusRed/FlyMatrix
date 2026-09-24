@@ -67,6 +67,7 @@ out vec4 fragColour;
 uniform vec3 uColour;
 uniform vec3 uEye;
 uniform float uGlow;
+uniform float uAlpha;
 
 void main() {
     vec3 n = normalize(vNormal);
@@ -82,6 +83,16 @@ void main() {
     vec3 base = uColour * (fill + 0.75 * diffuse) + vec3(0.9) * spec * 0.25;
     // Active muscles push their segment toward hot white.
     vec3 hot = vec3(1.0, 0.75, 0.35);
+    // Glass: translucent, and brighter where the surface turns away from
+    // the viewer, which is how a real pane reads at a glancing angle.
+    float a = clamp(uAlpha, 0.0, 1.0);
+    if (a < 0.999) {
+        float facing = abs(dot(n, normalize(uEye - vWorld)));
+        float fresnel = pow(1.0 - facing, 3.0);
+        vec3 tint = uColour * (0.35 + 0.65 * diffuse) + vec3(fresnel * 0.55);
+        fragColour = vec4(tint, a + fresnel * 0.35);
+        return;
+    }
     fragColour = vec4(mix(base, hot, clamp(uGlow, 0.0, 1.0)), 1.0);
 }
 )";
@@ -145,10 +156,22 @@ void printHelp() {
         "  --dump-pose        print the rest pose and exit\n"
         "  --no-physics       set joint angles directly instead of simulating\n"
         "  --drop MS          run physics headlessly for MS and report\n"
-        "  --muscle-torque X  peak torque per muscle pool\n\n"
+        "  --muscle-torque X  peak torque per muscle pool\n"
+        "  --gait MS          walk with an imposed tripod of this period\n"
+        "                     (a sine wave, not a neuron -- see the README)\n"
+        "  --gait-swing RAD   coxa swing amplitude (default 0.3)\n"
+        "  --probe-joint NAME print per-leg drive on one joint\n"
+        "  --arena MM         half-width of the box (default 6)\n"
+        "  --walls/--no-walls glass walls (on in the 3D view, off for --drop)\n"
+        "  --ceiling          close the box at the top\n"
+        "  --no-ground        remove the floor, so the fly falls\n"
+        "  --no-gravity       switch gravity off\n"
+        "  --no-arena         hide the arena without changing the physics\n\n"
         "controls\n"
         "  left drag   orbit          scroll  zoom         right drag  pan\n"
-        "  space       fire stimulus  r       reset        esc         quit\n");
+        "  space       fire stimulus  r       reset        esc         quit\n"
+        "  g  ground on/off    b  glass walls    c  ceiling\n"
+        "  v  gravity on/off   h  hide arena     -/+  arena size\n");
 }
 
 bool ownsItsConsole() {
@@ -210,6 +233,16 @@ int run(int argc, char** argv) {
     // not a neuron. It is here so the walking can be watched.
     float gaitPeriodMs = 0.0f;
     float gaitSwing = 0.3f;
+    // The arena. Walls default on in the 3D view so the fly is visibly in a
+    // place rather than floating in a void, and default off in the engine so
+    // the headless measurements are unchanged.
+    bool showArena = true;
+    bool arenaWalls = true;
+    bool wallsExplicit = false;
+    bool arenaCeiling = false;
+    bool noGround = false;
+    bool noGravity = false;
+    float arenaSize = 6.0f;
     float extraLoad = 0.0f;
     // Print the per-leg drive on one joint each sample, so a gait
     // pattern (or its absence) is visible directly.
@@ -259,6 +292,13 @@ int run(int argc, char** argv) {
         else if (a == "--no-split") noSplit = true;
         else if (a == "--gait") gaitPeriodMs = std::stof(next("--gait"));
         else if (a == "--gait-swing") gaitSwing = std::stof(next("--gait-swing"));
+        else if (a == "--arena") arenaSize = std::stof(next("--arena"));
+        else if (a == "--no-arena") showArena = false;
+        else if (a == "--no-walls") { arenaWalls = false; wallsExplicit = true; }
+        else if (a == "--walls") { arenaWalls = true; wallsExplicit = true; }
+        else if (a == "--ceiling") arenaCeiling = true;
+        else if (a == "--no-ground") noGround = true;
+        else if (a == "--no-gravity") noGravity = true;
         else if (a == "--no-sensory") useSensory = false;
         else if (a == "--load") extraLoad = std::stof(next("--load"));
         else if (a == "--sensory-drive") {
@@ -318,6 +358,22 @@ int run(int argc, char** argv) {
     phys.params.forceJoint = forceJoint;
     phys.params.forceDrive = forceDrive;
     if (usePhysics) phys.build(body);
+    // Applied after build(), which recreates the world and its params.
+    if (usePhysics) {
+        phys.world.params.arenaHalfX = arenaSize;
+        phys.world.params.arenaHalfY = arenaSize;
+        phys.world.params.arenaHeight = arenaSize * 1.2f;
+        // Walls are a feature of the 3D view, not of the measurements. A
+        // headless --drop run keeps them off unless asked, because they are
+        // not free: with a 6 mm box the giant fibre jump comes back 4.53 mm
+        // instead of 7.20, having bounced off one, and every jump figure in
+        // the README and findings was taken without them.
+        phys.world.params.wallsOn =
+            wallsExplicit ? arenaWalls : (arenaWalls && dropMs <= 0.0f);
+        phys.world.params.ceilingOn = arenaCeiling;
+        phys.world.params.groundOn = !noGround;
+        if (noGravity) phys.world.params.gravity = {0, 0, 0};
+    }
     if (gaitPeriodMs > 0.0f) phys.params.useManualTarget = true;
     float gaitClockMs = 0.0f;
     if (corrVel > 0.0f) phys.world.params.maxCorrectionVelocity = corrVel;
@@ -520,6 +576,8 @@ int run(int argc, char** argv) {
     Mesh sph = Mesh::sphere(14, 20);
     cyl.upload();
     sph.upload();
+    Mesh cube = Mesh::box();
+    cube.upload();
 
     const GLint uViewProj = gl::glGetUniformLocation(prog, "uViewProj");
     const GLint uModel = gl::glGetUniformLocation(prog, "uModel");
@@ -527,12 +585,20 @@ int run(int argc, char** argv) {
     const GLint uColour = gl::glGetUniformLocation(prog, "uColour");
     const GLint uEyeLoc = gl::glGetUniformLocation(prog, "uEye");
     const GLint uGlow = gl::glGetUniformLocation(prog, "uGlow");
+    const GLint uAlpha = gl::glGetUniformLocation(prog, "uAlpha");
 
     viz::OrbitCamera cam;
     cam.zUp = true;
     cam.target = {-0.1f, 0, 0.30f};
-    cam.distance = 3.0f;
-    cam.pitch = 0.35f;
+    // Pull back far enough to see the box the fly is standing in, but not
+    // so far that the fly becomes a speck. Scaled off the arena so --arena
+    // reframes automatically.
+    cam.distance = (usePhysics && arenaWalls) ? arenaSize * 1.15f : 3.0f;
+    // Negative, because eye = target - forward * distance and forward.z is
+    // +sin(pitch): a positive pitch puts the camera *below* the target. It
+    // always had, and with nothing drawn at z = 0 nobody noticed the fly was
+    // being viewed from underground until there was a floor to hide behind.
+    cam.pitch = -0.32f;
     cam.yaw = 0.8f;
 
     bool running = true, dragL = false, dragR = false, stimulating = false;
@@ -565,6 +631,40 @@ int run(int argc, char** argv) {
                         stepsPerFrame = std::max(1, stepsPerFrame - 1);
                     else if (ev.key.key == SDLK_RIGHTBRACKET)
                         stepsPerFrame = std::min(200, stepsPerFrame + 1);
+                    // Arena controls. These change the physics live, so
+                    // turning the floor off drops the fly and turning gravity
+                    // off leaves it where it is -- which is the quickest way
+                    // to see that the two are separate things.
+                    else if (ev.key.key == SDLK_G) {
+                        phys.world.params.groundOn = !phys.world.params.groundOn;
+                        std::printf("ground %s\n",
+                                    phys.world.params.groundOn ? "on" : "off");
+                    } else if (ev.key.key == SDLK_B) {
+                        phys.world.params.wallsOn = !phys.world.params.wallsOn;
+                        std::printf("walls %s\n",
+                                    phys.world.params.wallsOn ? "on" : "off");
+                    } else if (ev.key.key == SDLK_C) {
+                        phys.world.params.ceilingOn = !phys.world.params.ceilingOn;
+                        std::printf("ceiling %s\n",
+                                    phys.world.params.ceilingOn ? "on" : "off");
+                    } else if (ev.key.key == SDLK_V) {
+                        const bool on = phys.world.params.gravity.z != 0.0f;
+                        phys.world.params.gravity = on ? V3{0, 0, 0}
+                                                       : V3{0, 0, -9810.0f};
+                        std::printf("gravity %s\n", on ? "off" : "on");
+                    } else if (ev.key.key == SDLK_H) {
+                        showArena = !showArena;
+                    } else if (ev.key.key == SDLK_MINUS) {
+                        arenaSize = std::max(3.0f, arenaSize - 2.0f);
+                        phys.world.params.arenaHalfX = arenaSize;
+                        phys.world.params.arenaHalfY = arenaSize;
+                        phys.world.params.arenaHeight = arenaSize * 1.2f;
+                    } else if (ev.key.key == SDLK_EQUALS) {
+                        arenaSize = std::min(60.0f, arenaSize + 2.0f);
+                        phys.world.params.arenaHalfX = arenaSize;
+                        phys.world.params.arenaHalfY = arenaSize;
+                        phys.world.params.arenaHeight = arenaSize * 1.2f;
+                    }
                     break;
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     if (ev.button.button == SDL_BUTTON_LEFT) dragL = true;
@@ -670,8 +770,48 @@ int run(int argc, char** argv) {
             gl::glUniformMatrix4fv(uNormalMat, 1, GL_FALSE, nrm.m);
             gl::glUniform3f(uColour, colour.x, colour.y, colour.z);
             gl::glUniform1f(uGlow, glow);
+            gl::glUniform1f(uAlpha, 1.0f);
             mesh.draw();
         };
+
+        // Same, but translucent: used for the arena's glass.
+        auto drawGlass = [&](const V3& centre, const V3& half, const V3& colour,
+                             float alpha) {
+            const M4 model = M4::fromTransform({centre, Quat{}, 1.0f}, half);
+            const M4 nrm = M4::fromTransform({{0, 0, 0}, Quat{}, 1.0f},
+                                             {1.0f / half.x, 1.0f / half.y,
+                                              1.0f / half.z});
+            gl::glUniformMatrix4fv(uModel, 1, GL_FALSE, model.m);
+            gl::glUniformMatrix4fv(uNormalMat, 1, GL_FALSE, nrm.m);
+            gl::glUniform3f(uColour, colour.x, colour.y, colour.z);
+            gl::glUniform1f(uGlow, 0.0f);
+            gl::glUniform1f(uAlpha, alpha);
+            cube.draw();
+        };
+
+        // The arena. Drawn before the fly so the opaque floor is in the depth
+        // buffer, with the glass left until after everything else.
+        const auto& ap = phys.world.params;
+        if (usePhysics && ap.groundOn && showArena) {
+            // A thin slab rather than an infinite plane, so it has edges and
+            // the eye can tell how big the box is.
+            drawPart({{0, 0, ap.groundZ - 0.4f}, Quat{}, 1.0f},
+                     {ap.arenaHalfX, ap.arenaHalfY, 0.4f},
+                     {0.16f, 0.17f, 0.20f}, 0.0f, cube);
+            // Grid lines, as thin raised slabs. A floor with no texture gives
+            // the eye nothing to judge translation against, which is most of
+            // why the fly looked as though it were floating.
+            const float step = 1.0f;
+            const float t = 0.012f;
+            for (float g = -ap.arenaHalfX; g <= ap.arenaHalfX + 0.01f; g += step) {
+                drawPart({{g, 0, ap.groundZ + 0.001f}, Quat{}, 1.0f},
+                         {t, ap.arenaHalfY, 0.004f}, {0.30f, 0.33f, 0.38f}, 0.0f, cube);
+            }
+            for (float g = -ap.arenaHalfY; g <= ap.arenaHalfY + 0.01f; g += step) {
+                drawPart({{0, g, ap.groundZ + 0.001f}, Quat{}, 1.0f},
+                         {ap.arenaHalfX, t, 0.004f}, {0.30f, 0.33f, 0.38f}, 0.0f, cube);
+            }
+        }
 
         // Body: thorax, abdomen behind it, head in front. The long axis is X
         // (fore-aft), so that is where the length goes -- putting it on Z
@@ -706,6 +846,32 @@ int run(int argc, char** argv) {
             drawPart({seg.a, Quat{}, 1.0f},
                      {seg.radius * 1.25f, seg.radius * 1.25f, seg.radius * 1.25f},
                      {0.38f, 0.32f, 0.24f}, glow, sph);
+        }
+
+        // Glass last, and with depth writes off. Translucent surfaces have
+        // to be drawn after everything behind them or they blend against an
+        // empty framebuffer instead of the scene, and writing depth would
+        // make the near pane occlude the far one.
+        if (usePhysics && showArena && (ap.wallsOn || ap.ceilingOn)) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_FALSE);
+            const float hz = ap.arenaHeight * 0.5f;
+            const float mid = ap.groundZ + hz;
+            const float t = 0.05f;
+            const V3 tint{0.45f, 0.62f, 0.72f};
+            if (ap.wallsOn) {
+                drawGlass({+ap.arenaHalfX, 0, mid}, {t, ap.arenaHalfY, hz}, tint, 0.07f);
+                drawGlass({-ap.arenaHalfX, 0, mid}, {t, ap.arenaHalfY, hz}, tint, 0.07f);
+                drawGlass({0, +ap.arenaHalfY, mid}, {ap.arenaHalfX, t, hz}, tint, 0.07f);
+                drawGlass({0, -ap.arenaHalfY, mid}, {ap.arenaHalfX, t, hz}, tint, 0.07f);
+            }
+            if (ap.ceilingOn) {
+                drawGlass({0, 0, ap.groundZ + ap.arenaHeight},
+                          {ap.arenaHalfX, ap.arenaHalfY, t}, tint, 0.05f);
+            }
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
         }
 
         const bool last = frameLimit > 0 &&

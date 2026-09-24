@@ -52,6 +52,29 @@ Mesh Mesh::cylinder(int radialSegments) {
     return m;
 }
 
+Mesh Mesh::box() {
+    // Six faces, four vertices each, so every face gets its own flat normal.
+    // Sharing corner vertices between faces would average the normals and a
+    // cube would shade like a ball.
+    Mesh m;
+    const V3 normals[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                           {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    for (const V3& n : normals) {
+        // Two directions spanning the face.
+        const V3 u = (std::fabs(n.x) > 0.5f) ? V3{0, 1, 0} : V3{1, 0, 0};
+        const V3 v = cross(n, u);
+        const auto base = static_cast<std::uint32_t>(m.vertices_.size());
+        m.vertices_.push_back({n - u - v, n});
+        m.vertices_.push_back({n + u - v, n});
+        m.vertices_.push_back({n + u + v, n});
+        m.vertices_.push_back({n - u + v, n});
+        for (const std::uint32_t k : {0u, 1u, 2u, 0u, 2u, 3u}) {
+            m.indices_.push_back(base + k);
+        }
+    }
+    return m;
+}
+
 Mesh Mesh::sphere(int rings, int sectors) {
     Mesh m;
     const int R = rings < 2 ? 2 : rings;

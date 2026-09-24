@@ -130,9 +130,23 @@ struct HingeJoint {
     float muscleImpulse = 0.0f;
 };
 
+// The six planes of the arena, in the order buildGroundContacts tests them.
+// A probe can touch more than one at a time -- a foot in a corner touches
+// three -- so the plane index is part of a contact's identity, not just the
+// probe.
+enum class Plane : std::uint8_t {
+    Floor = 0, Ceiling, MinX, MaxX, MinY, MaxY, Count
+};
+constexpr int kPlaneCount = static_cast<int>(Plane::Count);
+
 struct Contact {
     std::uint32_t body = 0;
     std::uint32_t probe = 0;
+    // Which arena plane this contact is against. Warm starting is keyed on
+    // (probe, plane): keyed on the probe alone, a foot touching the floor and
+    // a wall would have the two contacts overwrite each other's stored
+    // impulse every frame and neither would converge.
+    std::uint8_t plane = 0;
     V3 localPoint;       // contact point in the body's frame
     V3 normal{0, 0, 1};  // world, pointing out of the ground
     float penetration = 0.0f;
@@ -163,6 +177,22 @@ public:
         float linearDamping = 0.02f;
         float angularDamping = 0.04f;
         float groundZ = 0.0f;
+
+        // The arena: an axis-aligned box the fly is contained by.
+        //
+        // The floor is what the fly has always stood on. The walls and
+        // ceiling are off by default so that every existing measurement is
+        // unchanged -- a jump reaches 7 mm and would start bouncing off a
+        // ceiling that was not there when the numbers were taken.
+        //
+        // Extents are half-widths from the origin, in millimetres, and the
+        // fly is about 2.5 mm long.
+        bool groundOn = true;
+        bool wallsOn = false;
+        bool ceilingOn = false;
+        float arenaHalfX = 15.0f;
+        float arenaHalfY = 15.0f;
+        float arenaHeight = 18.0f;  // above groundZ
 
         // Velocity ceilings. A large muscle torque on a light distal segment
         // produces an angular velocity per substep that no number of solver

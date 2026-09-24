@@ -474,6 +474,52 @@ floor and made broad activation stronger -- see
   contacts are point probes with no swept test.
 - **Slow.** 64 iterations at an 8 kHz substep is far from real time.
 
+## The arena
+
+```sh
+flybody --gait 60 --pulse 0 --stim-type KC   # a fly walking in a glass box
+flybody --arena 12                           # a bigger room
+flybody --no-ground                          # take the floor away
+```
+
+The fly stands in an axis-aligned box: an opaque floor with a one-millimetre
+grid, four glass walls and an optional ceiling. The grid is there to be
+measured against. A fly is about 2.5 mm long and walks at 3.74 mm/s in this
+model, and against a plain background neither number is visible -- the body
+simply appeared to hang in space, which is most of why the mechanics were hard
+to judge by eye.
+
+In the 3D view: `g` floor, `b` walls, `c` ceiling, `v` gravity, `h` hides the
+arena without touching the physics, `-`/`+` resize it. Toggling the floor and
+toggling gravity are separate, which makes the difference between them
+visible: with the floor off the fly falls, and with gravity also off it simply
+stays where it is.
+
+Gravity was always there, at 9810 mm/s^2. Removing the floor is a decent check
+that it is right:
+
+```
+--no-ground, 300 ms     fell 440.1 mm
+1/2 g t^2               441.5 mm
+```
+
+The 1.4 mm shortfall is the linear damping.
+
+**Walls are a property of the view, not of the measurements.** A headless
+`--drop` run leaves them off unless `--walls` asks for them, because they are
+not free: inside a 6 mm box the giant fibre jump comes back 4.53 mm instead of
+7.20, having bounced off one, and every jump figure quoted in this file and in
+`docs/findings.md` was taken without them.
+
+Two bugs surfaced as soon as there was a floor to see them against. The camera
+had been **below ground the whole time** -- `eye = target - forward * distance`
+with `forward.z = +sin(pitch)`, so the positive default pitch put it under the
+floor, and with nothing drawn at z = 0 there was no way to tell. And the trunk
+was drawn from a Transform the physics never wrote to, so the body and the legs
+only agreed while the fly stayed still; during a jump the body stayed behind,
+and while walking the legs strode off and left it hanging several millimetres
+back.
+
 ## Walking
 
 ```sh

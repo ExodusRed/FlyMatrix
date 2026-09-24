@@ -25,6 +25,9 @@ public:
     static Mesh cylinder(int radialSegments = 12);
     // A sphere of radius 1, for joints and the body.
     static Mesh sphere(int rings = 12, int sectors = 16);
+    // A unit cube spanning -1..+1 on each axis, with outward normals. Scaled
+    // by the model matrix into the arena's floor slab and glass walls.
+    static Mesh box();
 
     // Upload to the GPU. Requires a current GL context and fly::gl::load().
     void upload();

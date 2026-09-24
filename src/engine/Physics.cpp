@@ -418,28 +418,55 @@ void PhysicsWorld::solveJoints(float dt) {
 
 void PhysicsWorld::buildGroundContacts() {
     contacts.clear();
+
+    // Each arena plane as an inward normal and an offset: a point p is inside
+    // when dot(n, p) >= d, so penetration is d + radius - dot(n, p). Writing
+    // all six the same way means the floor is not a special case, which is
+    // what it used to be.
+    struct PlaneDef { V3 n; float d; bool on; };
+    const float gz = params.groundZ;
+    const PlaneDef planes[kPlaneCount] = {
+        {{ 0,  0,  1},  gz,                       params.groundOn},
+        {{ 0,  0, -1}, -(gz + params.arenaHeight), params.ceilingOn},
+        {{ 1,  0,  0}, -params.arenaHalfX,        params.wallsOn},
+        {{-1,  0,  0}, -params.arenaHalfX,        params.wallsOn},
+        {{ 0,  1,  0}, -params.arenaHalfY,        params.wallsOn},
+        {{ 0, -1,  0}, -params.arenaHalfY,        params.wallsOn},
+    };
+
     for (const auto& p : probes) {
         const RigidBody& b = bodies[p.body];
         const V3 world = b.position + b.orientation.rotate(p.localPoint);
-        const float depth = params.groundZ + p.radius - world.z;
-        if (depth <= 0.0f) continue;
-        Contact c;
-        c.body = p.body;
-        c.probe = static_cast<std::uint32_t>(&p - probes.data());
-        c.localPoint = p.localPoint;
-        c.normal = {0, 0, 1};
-        c.penetration = depth;
-        // One probe is one foot, so a contact keeps its identity between
-        // frames and its impulse can be carried across.
-        if (c.probe < probeImpulse.size()) c.normalImpulse = probeImpulse[c.probe];
-        contacts.push_back(c);
+        const auto probeIdx = static_cast<std::uint32_t>(&p - probes.data());
+
+        for (int k = 0; k < kPlaneCount; ++k) {
+            if (!planes[k].on) continue;
+            const float depth =
+                planes[k].d + p.radius - dot(planes[k].n, world);
+            if (depth <= 0.0f) continue;
+
+            Contact c;
+            c.body = p.body;
+            c.probe = probeIdx;
+            c.plane = static_cast<std::uint8_t>(k);
+            c.localPoint = p.localPoint;
+            c.normal = planes[k].n;
+            c.penetration = depth;
+            // One probe against one plane is a stable identity between
+            // frames, so its impulse can be carried across.
+            const std::size_t key = probeIdx * kPlaneCount + k;
+            if (key < probeImpulse.size()) c.normalImpulse = probeImpulse[key];
+            contacts.push_back(c);
+        }
     }
 }
 
 void PhysicsWorld::solveContacts(float dt) {
     const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
 
-    probeImpulse.assign(probes.size(), 0.0f);
+    // Keyed on (probe, plane): a foot can touch the floor and a wall at
+    // the same time and each contact needs its own carried impulse.
+    probeImpulse.assign(probes.size() * kPlaneCount, 0.0f);
 
     for (int it = 0; it < params.iterations; ++it) {
         for (auto& c : contacts) {
@@ -494,7 +521,9 @@ void PhysicsWorld::solveContacts(float dt) {
     }
 
     for (const auto& c : contacts) {
-        if (c.probe < probeImpulse.size()) probeImpulse[c.probe] = c.normalImpulse;
+        const std::size_t key =
+            static_cast<std::size_t>(c.probe) * kPlaneCount + c.plane;
+        if (key < probeImpulse.size()) probeImpulse[key] = c.normalImpulse;
     }
 }
 
