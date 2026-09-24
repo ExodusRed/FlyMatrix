@@ -484,7 +484,7 @@ flybody --no-ground                          # take the floor away
 
 The fly stands in an axis-aligned box: an opaque floor with a one-millimetre
 grid, four glass walls and an optional ceiling. The grid is there to be
-measured against. A fly is about 2.5 mm long and walks at 3.74 mm/s in this
+measured against. A fly is about 2.5 mm long and walks at 8.37 mm/s in this
 model, and against a plain background neither number is visible -- the body
 simply appeared to hang in space, which is most of why the mechanics were hard
 to judge by eye.
@@ -535,14 +535,23 @@ python tools/feco_split.py --all-legs
 The body walks:
 
 ```
-travelled +7.480 mm in 2.0 s (3.74 mm/s)
-height 0.620 -> 0.594 mm, worst pitch 9.0 deg, 5-6 feet down
+travelled +16.741 mm in 2.0 s (8.37 mm/s)
+stride 0.377 mm at 22.2 Hz, duty factor 0.65
+height 0.620 -> 0.557 mm, worst pitch 18.6 deg
 ```
 
-Travel is linear to three figures across the whole two seconds, so this is
-steady locomotion rather than a fall dressed up as progress. A real fly does
-10-25 mm/s, so it is about four times slow, at a physiological 16.7 Hz step
-frequency and a 0.3 rad coxa swing.
+A real fly does 10-25 mm/s with a stride near 1.3 mm at a duty factor around
+0.5, so this is at the slow end and still scuffing: a duty factor of 0.65 means
+the legs are on the ground two-thirds of the time instead of half.
+
+The fast settings exist and the fly cannot use them. With the tarsus curling
+during swing it reaches a 1.204 mm stride at a duty factor of 0.48 and
+26.76 mm/s -- real *Drosophila* on every count -- and pitches to 87 degrees and
+falls over. Every setting in the sweep that produced a biological stride
+tumbled; the shipped default is the quickest one holding pitch under 20
+degrees. See [docs/findings.md](docs/findings.md) sections 12 to 14 for why
+that is a control problem rather than a gait problem, and for a postural
+controller that stabilises it and costs more speed than it saves.
 
 **The rhythm is a sine wave, not a neuron.** `--gait` imposes an alternating
 tripod by hand. It exists to answer a question that had to come first: given a
