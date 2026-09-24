@@ -250,7 +250,8 @@ int traceOne(const std::string& jointName_, float drive) {
 // hind-left swing together while the other three are in stance. Within a leg,
 // ThC retracts through stance to push the body forward, and during swing CTr
 // lifts the foot clear while ThC protracts to reset it.
-int gaitTest(float periodMs, float amplitude, float lift, float toeLift) {
+int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
+             float postureGain, float postureRate) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
@@ -314,6 +315,51 @@ int gaitTest(float periodMs, float amplitude, float lift, float toeLift) {
             // come up with the leg.
             phys.params.manualTarget[l][static_cast<int>(Joint::TiTa)] =
                 (c > 0.0f) ? toeLift * c : 0.0f;
+
+            // Postural feedback, and it is a hand-built controller: no
+            // neuron is involved and it must not be reported as the nervous
+            // system stabilising anything.
+            //
+            // It is here to answer the question the open-loop sweep left
+            // hanging. Every gait setting that produced a biological stride
+            // fell over, and every setting that stayed upright produced a
+            // short one, which says the fly is not short of stride but short
+            // of correction. A real fly is correcting continuously -- through
+            // campaniform sensilla reporting leg load and halteres reporting
+            // body rotation -- and the faster it walks the more it needs to.
+            //
+            // The rule is the simplest thing that could work: if the body is
+            // pitching nose-up, extend the front legs less and the hind legs
+            // more, and the reverse nose-down. Roll does the same across left
+            // and right.
+            if (postureGain > 0.0f || postureRate > 0.0f) {
+                const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
+                const V3 lat = phys.thorax().orientation.rotate({0, 1, 0});
+                const float pitchErr = fwd.z;   // + is nose-up
+                const float rollErr = lat.z;    // + is left side up
+                // Front legs are +1, hind legs -1; left legs +1, right -1.
+                const float fore = (l < 2) ? +1.0f : (l < 4 ? 0.0f : -1.0f);
+                const float side = (l % 2 == 0) ? +1.0f : -1.0f;
+                // Rate term, and it is the biologically correct signal.
+                //
+                // A haltere is a gyroscope: it reports the body's angular
+                // *velocity*, not its angle. Proportional correction on angle
+                // alone stabilised pitch from 87 to 19 degrees and cost most
+                // of the speed, which is what a P controller with no damping
+                // does -- it fights the error after the error exists.
+                const V3 w = phys.thorax().angularVelocity;
+                const float pitchRate = -w.y;   // + is pitching nose-up
+                const float rollRate = w.x;     // + is left side rising
+                const float corr =
+                    postureGain * (pitchErr * fore + rollErr * side) +
+                    postureRate * (pitchRate * fore + rollRate * side);
+                // Note the sign. CTr negative extends the leg and raises the
+                // body at that corner (flyphys test 2: CTr -15 LIFTS), so
+                // correcting a nose-up pitch means making the front legs'
+                // CTr *more positive*. Getting this backwards drove the fly
+                // backwards at -48 mm/s with a duty factor of 0.13.
+                phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] += corr;
+            }
         }
         phys.step(kDt);
         const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
@@ -452,7 +498,13 @@ int main(int argc, char** argv) {
             const float toe = (i + 4 < argc && argv[i + 4][0] != '-')
                                   ? std::stof(argv[i + 4])
                                   : 0.4f;
-            return gaitTest(periodMs, amp, lift, toe);
+            const float pg = (i + 5 < argc && argv[i + 5][0] != '-')
+                                 ? std::stof(argv[i + 5])
+                                 : 0.0f;
+            const float pr = (i + 6 < argc && argv[i + 6][0] != '-')
+                                 ? std::stof(argv[i + 6])
+                                 : 0.0f;
+            return gaitTest(periodMs, amp, lift, toe, pg, pr);
         }
     }
 

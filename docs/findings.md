@@ -1202,3 +1202,85 @@ against the previous rest pose and should be read as illustrating the chaos
 rather than as current values. It is further evidence for finding 12's
 conclusion: the jump height is not a reproducible quantity in this model, and
 anything that perturbs timing moves it.
+
+
+---
+
+## 14. Postural feedback: the mechanism works, the tuning does not converge
+
+Finding 13 ended on a clear diagnosis. Every gait setting that produced a
+biological stride fell over and every setting that stayed upright produced a
+short one, so the fly is not short of stride but short of correction. The
+obvious next move was to give it some.
+
+`flyphys --gait` now takes two feedback gains, both off by default. The rule is
+the simplest thing that could work: if the body is pitching nose-up, extend the
+front legs less and the hind legs more; roll does the same across left and
+right.
+
+### Proportional feedback works, and costs everything it gains
+
+Applied to the fast-but-tumbling setting (period 45, swing 0.2, lift 0.3, toe
+curl 0.3), which open-loop reaches 26.76 mm/s at 87 degrees of pitch:
+
+```
+gain     speed   stride   duty   pitch
+0        26.76    1.204   0.48   86.9
+0.5      -4.33   -0.195   0.58   34.9
+1.5       4.78    0.215   0.67   18.7
+3.0      -1.20   -0.054   0.49   83.6
+6.0      16.33    0.735   0.24   85.1
+```
+
+At a gain of 1.5 the pitch falls from 87 degrees to 18.7, which is a real
+effect and says the mechanism is sound. It also drops the speed from 26.76 to
+4.78, which is worse than doing nothing. And the response is not monotonic in
+the gain: 3.0 is worse than 1.5 and 6.0 is worse again.
+
+One sign error found on the way, worth recording because it is easy to make
+twice. CTr negative *extends* the leg and raises the body at that corner
+(flyphys test 2 reports CTr -15 as LIFTS), so correcting a nose-up pitch means
+making the front legs' CTr more positive, not less. Backwards, the controller
+drove the fly at -48 mm/s with a duty factor of 0.13.
+
+### The haltere term did not rescue it
+
+A proportional controller with no damping fights an error only once the error
+exists, so the natural addition is a rate term -- and that is also the
+biologically correct signal. A haltere is a gyroscope. It reports the body's
+angular velocity, not its angle, which is exactly the derivative term a
+proportional controller is missing.
+
+It did not help. At rate gains large enough to matter the fly is flung rather
+than walked (95 mm/s at a duty factor of 0.17 and 89 degrees of pitch, which is
+a tumble with forward momentum, not locomotion), and at gains small enough to
+stay upright it settles at 4 to 7 mm/s and 21 to 35 degrees -- no better than
+the 8.37 mm/s at 18.6 degrees that the open-loop gait already manages.
+
+```
+rate      speed   stride   duty   pitch
+0.0002     6.57    0.296   0.60   31.4
+0.0005     4.20    0.189   0.57   34.7
+0.001      6.62    0.298   0.66   20.9
+0.002      5.89    0.265   0.61   34.6
+```
+
+### Why this stopped here rather than continuing to sweep
+
+Two gains against a response surface already known to be chaotic will always
+produce a best point, and it will not mean anything. This project has the
+evidence for that already: caching the world inertia, a change that alters no
+physics at all, moved the gait's worst pitch from 12.8 degrees to 43.5, and
+sampling `maxMuscleTorque` finely enough dissolved what had looked like a
+smooth plateau into noise.
+
+Any gain pair picked from these tables would be a number that a recompile could
+undo. So the controller ships off, with the tables above as the record of what
+it does, and the honest position is that this needs either a principled design
+-- deriving the gains from the body's inertia and step period rather than
+searching for them -- or an evaluation that scores across many conditions
+rather than one two-second run.
+
+What is not in doubt is that the mechanism is the right one and the model needs
+it. An open-loop pattern cannot walk this body quickly and stay upright, and no
+amount of better sine waves will change that.
