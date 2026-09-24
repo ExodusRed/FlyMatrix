@@ -69,6 +69,7 @@ float g_corr = -1.0f;
 float g_substep = -1.0f;
 float g_tarsus = -1.0f;
 float g_minseg = -1.0f;
+float g_friction = -1.0f;
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
@@ -91,6 +92,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_iters > 0) phys.world.params.iterations = g_iters;
     if (g_baum > 0.0f) phys.world.params.baumgarte = g_baum;
     if (g_corr > 0.0f) phys.world.params.maxCorrectionVelocity = g_corr;
+    if (g_friction > 0.0f) phys.world.params.friction = g_friction;
 
     const int n = static_cast<int>(ms / 1000.0f / kDt);
     Result r{};
@@ -239,7 +241,7 @@ int traceOne(const std::string& jointName_, float drive) {
 // hind-left swing together while the other three are in stance. Within a leg,
 // ThC retracts through stance to push the body forward, and during swing CTr
 // lifts the foot clear while ThC protracts to reset it.
-int gaitTest(float periodMs, float amplitude) {
+int gaitTest(float periodMs, float amplitude, float lift) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
@@ -249,6 +251,7 @@ int gaitTest(float periodMs, float amplitude) {
     phys.params.useManualTarget = true;
     phys.build(skeleton);
     if (g_iters > 0) phys.world.params.iterations = g_iters;
+    if (g_friction > 0.0f) phys.world.params.friction = g_friction;
 
     // Tripod A = front_L, middle_R, hind_L; tripod B is the other three.
     const bool tripodA[kLegCount] = {true, false, false, true, true, false};
@@ -263,6 +266,15 @@ int gaitTest(float periodMs, float amplitude) {
 
     const int n = static_cast<int>(2000.0f / 1000.0f / kDt);
     float worstPitch = 0.0f;
+    float contactSum = 0.0f;
+    // Fore-aft excursion of one foot relative to the body. This is the
+    // geometry's answer to "how long can a stride be", independent of
+    // whether the foot grips: a leg that only sweeps 0.3 mm relative to the
+    // thorax cannot move the body further than that per step however well it
+    // holds the ground.
+    float footRelMin = 1e9f, footRelMax = -1e9f;
+    // How much of that sweep happens while the foot is actually loaded.
+    float stanceRelMin = 1e9f, stanceRelMax = -1e9f;
     for (int i = 0; i < n; ++i) {
         const float t = i * kDt * 1000.0f;
         const float phase = 6.2831853f * t / periodMs;
@@ -283,12 +295,26 @@ int gaitTest(float periodMs, float amplitude) {
             // "lift the foot" drove every swing leg into the floor, so all six
             // feet stayed planted and the fly shuffled backwards.
             phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
-                (c > 0.0f) ? amplitude * 0.6f * c : 0.0f;
+                (c > 0.0f) ? lift * c : 0.0f;
         }
         phys.step(kDt);
         const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
         const float pitch = std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f;
         worstPitch = std::max(worstPitch, std::fabs(pitch));
+        for (const auto& c : phys.world.contacts) {
+            if (c.probe < static_cast<std::uint32_t>(kLegCount)) contactSum += 1.0f;
+        }
+        {
+            const int probe = static_cast<int>(LegId::MiddleL);
+            const V3 f = phys.footPosition(probe);
+            const float rel = f.x - phys.thorax().position.x;
+            footRelMin = std::min(footRelMin, rel);
+            footRelMax = std::max(footRelMax, rel);
+            if (phys.footLoad(probe) > 0.0f) {
+                stanceRelMin = std::min(stanceRelMin, rel);
+                stanceRelMax = std::max(stanceRelMax, rel);
+            }
+        }
         if (!std::isfinite(phys.bodyHeight())) {
             std::printf("DIVERGED at %.0f ms\n", t);
             return 2;
@@ -302,6 +328,21 @@ int gaitTest(float periodMs, float amplitude) {
 
     const float travel = phys.thorax().position.x - startX;
     const float held = phys.bodyHeight();
+
+    // Speed is stride length times step frequency, and the two say very
+    // different things about what is limiting it. A fly that steps quickly
+    // but travels little per step is scuffing, not walking.
+    const float stepHz = 1000.0f / periodMs;
+    const float strideMm = (travel / 2.0f) / stepHz;
+    // Duty factor: the share of the cycle a leg spends on the ground. A real
+    // fly walking fast is near 0.5; a fly with every foot down all the time
+    // is dragging.
+    const float meanFeet = contactSum / static_cast<float>(n);
+    std::printf("foot sweep %.3f mm relative to body, of which %.3f mm "
+                "loaded\n", footRelMax - footRelMin,
+                (stanceRelMax > stanceRelMin) ? stanceRelMax - stanceRelMin : 0.0f);
+    std::printf("stride %.3f mm at %.1f Hz, mean feet down %.2f of 6 "
+                "(duty %.2f)\n", strideMm, stepHz, meanFeet, meanFeet / 6.0f);
     std::printf("\ntravelled %+.3f mm in 2.0 s (%.2f mm/s), height %.3f -> %.3f, "
                 "worst pitch %.1f deg\n",
                 travel, travel / 2.0f, startZ, held, worstPitch);
@@ -350,6 +391,9 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--minseg") == 0) {
             g_minseg = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--friction") == 0) {
+            g_friction = std::stof(argv[i + 1]);
+        }
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--stand-only") == 0) g_standOnly = true;
@@ -363,7 +407,13 @@ int main(int argc, char** argv) {
             const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 40.0f;
             // Radians of ThC swing, not an abstract drive number.
             const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.3f;
-            return gaitTest(periodMs, amp);
+            // Lift defaults well above the swing amplitude. Tied to it at
+            // 0.6 * amp the swing legs never cleared the ground and the fly
+            // scuffed along at a duty factor of 0.77.
+            const float lift = (i + 3 < argc && argv[i + 3][0] != '-')
+                                   ? std::stof(argv[i + 3])
+                                   : 0.6f;
+            return gaitTest(periodMs, amp, lift);
         }
     }
 

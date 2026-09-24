@@ -961,3 +961,130 @@ mount, where the real joint is a ball-and-socket with three degrees of freedom
 (yaw, pitch, roll). The proboscis is drawn retracted and cannot extend, so the
 fly has mouthparts but still cannot feed. Wings and halteres are drawn and
 carry no mass and do not articulate.
+
+
+---
+
+## 12. Why the fly was slow, and it was not what I expected
+
+Walking had reached 11.47 mm/s against a real *Drosophila*'s 10-25 mm/s, and
+the obvious question was what was holding it at the bottom of the range. Three
+hypotheses, measured in order, and the first two were wrong.
+
+### It is not cadence
+
+```
+ours        stride 0.459 mm at 25.0 Hz
+real fly    stride ~1.3 mm  at ~15 Hz
+```
+
+We step **faster** than a real fly and still travel more slowly. Speed is
+stride times frequency, and ours is short-stride, high-cadence -- which is the
+signature of scuffing rather than walking.
+
+### It is not grip
+
+The natural guess was slip. A real fly has adhesive tarsal pads and claws on
+the pretarsus and we model a point foot with Coulomb friction, so it seemed
+obvious. Sweeping friction over a fiftyfold range:
+
+```
+friction   0.4    0.9    2.0    5.0   20.0
+stride    0.344  0.420  0.347  0.395  0.426
+```
+
+Nothing. Whatever the foot is doing, it is not sliding for want of friction.
+Recorded because the adhesion story is plausible enough to be worth not
+re-deriving.
+
+### It was the swing leg never leaving the ground
+
+Measuring the foot's fore-aft travel relative to the body, and how much of it
+happens while the foot is carrying load:
+
+```
+foot sweep 1.192 mm relative to body, of which 1.189 mm loaded
+stride 0.420 mm, duty 0.77
+```
+
+The foot sweeps 1.19 mm and is loaded for **1.19 mm of it**. The leg is on the
+ground through essentially the whole cycle, so the return stroke pushes the
+body backwards nearly as hard as the power stroke pushes it forwards, and the
+1.19 mm sweep nets 0.42 mm of travel. Stride efficiency 35%.
+
+A real fly walking at speed has a duty factor near 0.5: three legs down, three
+in the air. Ours was 0.77.
+
+### Why it could not lift its feet
+
+Commanding a bigger foot lift did produce a proper duty factor -- 0.46 at a
+lift of 0.9 rad, which is biologically right -- and the fly fell over, pitching
+83 to 88 degrees. So the constraint was not the command. It was that the body
+could not stay upright on three legs.
+
+That traces straight back to the mass problem recorded in finding 11. The legs
+massed 754 ug against a 740 ug trunk, where a real fly's legs are perhaps 8% of
+it. Half the animal's mass was in its legs, and swinging that around is what
+tipped it over. The `minSegmentMass` floor -- a solver-stability number, not an
+anatomical one -- was setting the walking speed.
+
+### What fixed it
+
+Lowering the floor from 12 ug to 8 ug for the proximal segments, which became
+possible only once the rest pose was re-solved for the corrected leg lengths:
+at 12 ug the same value had failed to stand.
+
+```
+                       before     after
+stride efficiency        35%       70%
+duty factor             0.77      0.69
+walking speed         11.47      14.94 mm/s
+standing pitch        +0.89      +0.09 deg
+```
+
+Squarely inside the real range now, and four times the 3.74 mm/s this started
+at.
+
+One counter-intuitive detail worth keeping: the **tarsomeres need to stay
+heavier than the segments above them**. Dropping all floors to 8 ug makes the
+fly sag and fail to stand; keeping the tarsomeres at 12 while the rest go to 8
+is what works. They sit at the end of the longest lever and the solver appears
+to need the mass there.
+
+### Why a real fly is fast
+
+Worth stating alongside, because our numbers only mean something against the
+animal's.
+
+A fly is quick for reasons of scale before anything else. Muscle force goes
+with cross-sectional area and mass with volume, so force per unit mass goes as
+1/length: a 1 mg animal accelerates on a scale a large one cannot. Rotational
+inertia falls faster still, which is why a fly can turn in a wingbeat or two.
+Its whole nervous system is under a millimetre across, so conduction delays are
+tens of microseconds where ours as vertebrates are tens of milliseconds.
+
+For specific speeds it has dedicated machinery. The escape is a giant-fibre
+pathway with the fewest synapses evolution could manage, taking about 5 ms from
+looming stimulus to takeoff. Flight runs on asynchronous fibrillar muscle that
+oscillates mechanically at around 200 Hz, far above any rate its motor neurons
+fire at -- the muscle is stretch-activated and the nervous system only gates it.
+And the jump uses a catapult: energy stored in cuticle and released faster than
+muscle alone could deliver it.
+
+None of that is what limits our walking. Ours is limited by the mass
+distribution of the model and by a rhythm we do not yet have.
+
+### How fast the simulation itself runs
+
+A separate sense of slow, and worth having a number for:
+
+```
+mechanics only        0.03x real time
+with the connectome   0.025x real time
+```
+
+About 33x slower than the animal it models. 64 solver iterations at an 8 kHz
+substep across 57 bodies, plus 176,422 LIF neurons at 10 kHz. Neither has been
+optimised at all -- there is no spatial partitioning, no SIMD, no threading,
+and the substep rate was set by what kept the solver stable rather than by what
+it needs.
