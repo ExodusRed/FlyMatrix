@@ -71,7 +71,15 @@ constexpr float kJointDriveSign[kJointCount] = {
     // protractor pulling the leg forward against a planted foot pushes the
     // body backward, so positive drive maps to negative angle.
     -1.0f,  // ThC   measured: +15 propels forward, -15 backward
-    -1.0f,  // CTr   measured: -15 lifts  (was +1; test 2 says +15 sinks)
+    // CTr is genuinely ambiguous and is left as measured rather than guessed
+    // at. With the flat-tarsus pose, flyphys test 2 -- all six legs driven
+    // together -- says CTr +1.5 LIFTS, which argues for +1. Test 3, one leg
+    // at a time, says both directions sink on every leg, which argues for
+    // neither. Flipping it moves the giant fibre jump from 7.37 to 6.99 mm,
+    // a difference far inside the chaotic spread of that measurement, and
+    // leaves Kenyon cells and APL at exactly 0.6200 either way. There is no
+    // evidence here to justify changing it.
+    -1.0f,  // CTr   measured against the pre-flat-tarsus pose; see above
     +1.0f,  // TrF   measured: +15 lifts
     -1.0f,  // FTi   measured: -15 lifts, and lifts most
     -1.0f,  // TiTa  measured: -15 lifts  (was +1; test 2 says +15 sinks)

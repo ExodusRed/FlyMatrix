@@ -55,6 +55,10 @@ struct Result {
     float legShort[kLegCount];
     int feetDown;
     bool thoraxDown, abdomenDown, headDown;
+    // Did the fly leave the ground at any point during the probe? If it did,
+    // the height change is a flight path and says nothing about which way the
+    // joint lifts.
+    bool tookOff;
     bool diverged;
 };
 
@@ -85,7 +89,13 @@ float g_mintar = -1.0f;
 // joint, CTr -3 lifts on every leg and CTr +3 sinks on every leg. The signs
 // the rest of the project reads off this test were being taken from a fly
 // being thrown into the air.
-float g_probeDrive = 3.0f;
+// 1.5 is the drive at which this test is actually usable: no row takes off,
+// every joint moves, and nine of ten per-leg verdicts agree. At 3.0 half the
+// rows of test 2 are flight paths and four of ten legs disagree; at 1.0 most
+// joints do not move at all. The window is narrow because joint drive is not
+// graded -- below a threshold the posture servo holds, above it the joint
+// slams to its stop.
+float g_probeDrive = 1.5f;
 int g_inter = -1;
 float g_ms = 300.0f;
 bool g_standOnly = false;
@@ -117,6 +127,9 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     Result r{};
     for (int i = 0; i < n; ++i) {
         phys.step(kDt);
+        // Settling from the initial drop takes a moment; only count airtime
+        // after that.
+        if (i > 50 && phys.world.contacts.empty()) r.tookOff = true;
         if (!std::isfinite(phys.bodyHeight()) ||
             std::fabs(phys.bodyHeight()) > 1e4f) {
             r.diverged = true;
@@ -714,6 +727,10 @@ int main(int argc, char** argv) {
             const float lifted = r.height - base.height;
             const char* verdict;
             if (r.diverged) verdict = "DIVERGED";
+            // A fly that left the ground is not telling us about lift. This
+            // row is a flight path, and reading a sign off it is how
+            // kJointDriveSign came to be set from a launch.
+            else if (r.tookOff) verdict = "TOOK OFF -- unusable";
             else if (std::fabs(moved) < 0.01f) verdict = "joint did not move";
             else if (lifted > 0.05f) { verdict = "LIFTS"; anyLifts = true; }
             else if (lifted < -0.05f) verdict = "sinks";

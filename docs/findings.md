@@ -1512,3 +1512,60 @@ This also cost an hour to find because a held .exe meant `--probe-drive` was
 silently doing nothing across three separate sweeps, all of which returned
 identical numbers. The project has been caught by stale binaries before; the
 tell is results that do not move when they certainly should.
+
+
+---
+
+## 18. The rest pose had no room to move, and the probe had too much
+
+Two faults in the same place, found by chasing why the joint diagnostic gave
+answers that contradicted each other.
+
+### The rest pose sat on its limits
+
+Joint limits were symmetric -- CTr +/-1.6, FTi +/-2.6, TiTa +/-2.3 -- and the
+flat-tarsus rest pose puts the front leg at CTr -1.538, FTi +2.129, TiTa
+-2.219. That leaves
+
+
+
+Three joints of five effectively jammed against a stop. The rest-pose solver
+printed a limit margin of 0.062 rad and it was read and not acted on.
+
+The symptom was a diagnostic that made no sense: at a drive of +/-3 both
+directions of a joint were reported as lifting, because one direction could
+only push against its own stop. Limits are asymmetric now, as a real leg's
+are -- a knee has far more flexion than hyperextension -- and sized so the
+rest pose sits inside them with room either way.
+
+It did not fix walking. Repeatability stayed at two upright trials in five,
+so the jamming was real and was not what makes the gait fall over.
+
+### The probe was launching the fly
+
+Tests 2, 3 and 4 drove a joint at +/-15, a figure chosen when
+ was 5e5. At 2.7e6 that is around ten body weights on one
+joint. The tests now report whether the fly left the ground during a probe,
+and at +/-3 **five of ten rows in test 2 are flight paths**, not lifts.
+
+Sweeping the drive shows how narrow the usable window is:
+
+
+
+1.5 is now the default. The window is narrow because joint drive is not
+graded: below a threshold the posture servo simply holds, and above it the
+joint slams to its stop. That is a property of the muscle model worth
+remembering, not an artefact of the test.
+
+### And the sign it was supposed to settle is still unsettled
+
+ was measured against the pre-flat-tarsus pose. At the
+usable drive the two tests disagree about it: test 2, driving all six legs
+together, says CTr +1.5 lifts, which argues for +1; test 3, driving one leg at
+a time, says both directions sink on every leg, which argues for neither.
+
+Flipping it was tried. The giant fibre jump moves from 7.37 mm to 6.99, a
+difference far inside the chaotic spread of that measurement, and Kenyon cells
+and APL sit at exactly 0.6200 mm either way. There is no evidence to justify
+the change, so it is left as measured and the ambiguity is recorded in the
+table rather than resolved by preference.

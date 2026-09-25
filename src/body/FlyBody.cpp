@@ -35,6 +35,22 @@ struct LegLayout {
     float rest[kJointCount];
 };
 
+// Joint limits are set so the *rest pose* sits well inside them, not merely
+// so the angles are plausible.
+//
+// They were symmetric -- CTr +/-1.6, FTi +/-2.6, TiTa +/-2.3 -- and the rest
+// pose that lays the tarsus flat sits at CTr -1.538, FTi +2.129 and TiTa
+// -2.219 on the front leg. That left 0.062 rad of travel one way on CTr,
+// 0.471 on FTi and 0.081 on TiTa: three joints of five effectively jammed
+// against a stop in one direction. The rest-pose solver reported a limit
+// margin of 0.062 rad and it was read and not acted on.
+//
+// The symptom was a diagnostic that made no sense. Driving a joint at +/-3
+// reported both directions as lifting, because one direction could only push
+// against its own stop, and at +/-1 most joints did not move at all. The
+// limits are asymmetric now because a real leg's are: a knee has far more
+// flexion than hyperextension.
+//
 // Leg lengths and attachment points follow the usual description of an adult
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
@@ -139,17 +155,17 @@ FlyBody::FlyBody() {
         // jump muscle acts on, and it is the joint that levers the body off the
         // ground -- an abduction axis here cannot generate lift at all, in
         // either direction, which is what the earlier version did.
-        leg.joints[1] = {kLeft, L.rest[1], -1.6f, 1.6f, kTrochLen * s, 0.040f};
+        leg.joints[1] = {kLeft, L.rest[1], -2.8f, 2.0f, kTrochLen * s, 0.040f};
         // TrF twists the femur about its own long axis, which by now is the
         // frame's local Z.
         leg.joints[2] = {kUp * L.side, L.rest[2], -0.9f, 0.9f, kFemurLen * s, 0.036f};
         // FTi is the knee, the joint with the largest range, hinging about the
         // same local lateral axis.
-        leg.joints[3] = {kLeft, L.rest[3], -2.6f, 2.6f, kTibiaLen * s, 0.028f};
+        leg.joints[3] = {kLeft, L.rest[3], -1.0f, 3.3f, kTibiaLen * s, 0.028f};
         // TiTa is the ankle, bending the same way but less.
         // Widened from -1.2: laying the tarsus flat on a trailing hind leg
         // needs more range than that, and it jammed against the limit.
-        leg.joints[4] = {kLeft, L.rest[4], -2.3f, 2.3f, kTarsusLen * s, 0.020f};
+        leg.joints[4] = {kLeft, L.rest[4], -3.3f, 1.5f, kTarsusLen * s, 0.020f};
     }
     resetPose();
     root.position = {0, 0, 0.62f};
