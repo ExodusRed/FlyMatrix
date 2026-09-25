@@ -532,13 +532,25 @@ python tools/cpg_probe.py --joint ThC --leg middle_L
 python tools/feco_split.py --all-legs
 ```
 
-The body walks:
+**The body does not walk repeatably.** It walks from some starting states and
+falls over from most:
 
 ```
-travelled +16.741 mm in 2.0 s (8.37 mm/s)
-stride 0.377 mm at 22.2 Hz, duty factor 0.65
-height 0.620 -> 0.557 mm, worst pitch 18.6 deg
+median speed 3.70 mm/s (range -1.27 to 5.51)
+median pitch 25.0 deg (range 14.5 to 61.8)
+upright in 2 of 5 trials
 ```
+
+Those five trials differ only in starting height, by 8 um against a ride
+height of 550 um. The fly sometimes walks backwards.
+
+Earlier versions of this file quoted 8.37 mm/s upright, and before that
+17.04, 14.94 and 3.74. Every one of those was a single two-second run from a
+single starting state, which is not a measurement of a chaotically sensitive
+system -- three changes that altered no physics at all each moved the figure
+by more than a factor of two. `--gait` now runs five trials by default and
+reports the median with its range. See
+[docs/findings.md](docs/findings.md) section 16 for the retraction.
 
 A real fly does 10-25 mm/s with a stride near 1.3 mm at a duty factor around
 0.5, so this is at the slow end and still scuffing: a duty factor of 0.65 means

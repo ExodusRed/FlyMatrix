@@ -272,12 +272,16 @@ void FlyPhysics::build(const FlyBody& skeleton) {
 }
 
 float FlyPhysics::legSpan(int leg) const {
+    // Coxa to foot, where the foot is the tip of the *last* tarsomere.
+    //
+    // This used to index segments_[leg * kJointCount + kJointCount - 1],
+    // which was the whole tarsus until it was split into five. After the
+    // split that index is ta1, so the span stopped at 40% of the way along
+    // the foot and the proprioceptive compression signal in SensoryOrgans
+    // was measuring a leg that ended in the wrong place.
     const std::size_t base = static_cast<std::size_t>(leg) * kJointCount;
     const RigidBody& coxa = world.bodies[segments_[base].body];
-    const SegmentRef& tip = segments_[base + kJointCount - 1];
-    const RigidBody& tarsus = world.bodies[tip.body];
-    const V3 foot = tarsus.position + tarsus.orientation.rotate({0, 0, -tip.length});
-    return length(foot - coxa.position);
+    return length(footPosition(leg) - coxa.position);
 }
 
 float FlyPhysics::footLoad(int leg) const {

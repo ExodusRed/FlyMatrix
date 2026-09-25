@@ -1381,3 +1381,96 @@ not use well -- the intersegmental interneurons that finding 1 noted club
 chordotonal neurons project to heavily -- or sensory feedback, which in insects
 is substantially what coordinates stepping, and which this model cannot yet run
 stably (finding 10). Both routes lead back to the sensorimotor loop.
+
+
+---
+
+## 16. Correction: the walking figures were single trajectories
+
+**This section retracts a headline result reported in sections 8, 11, 12 and
+13.** Every walking speed quoted there came from one two-second run from one
+exact starting state, and one run is not a measurement of a chaotically
+sensitive system.
+
+The warning signs were all present and were written down without the
+conclusion being drawn. Three separate changes that altered no physics
+whatever each moved the headline figure by a factor of two or more:
+
+- caching the world inertia moved the worst pitch from 12.8 to 43.5 degrees
+- splitting `solveJoints` into passes moved the speed from 8.37 to 6.62 mm/s
+- re-solving the rest pose moved it from 5.65 to 1.87 mm/s
+
+Each time the response was to re-sweep and pick a new default. The right
+response was to stop trusting a single run.
+
+### What repeating it shows
+
+`flyphys --gait` now runs several trials from starting heights displaced by a
+few micrometres and reports the spread. At the best settings found, with a
+perturbation of +/-8 um against a ride height of 550 um -- about 1.5% --
+
+```
+  jitter      speed     stride     duty    pitch
+  -0.008      -1.27     -0.038     0.48     61.8
+  -0.004       3.08      0.093     0.63     34.7
+  +0.000       4.82      0.145     0.66     16.3
+  +0.004       5.51      0.165     0.63     25.0
+  +0.008       3.70      0.111     0.66     14.5
+
+median speed 3.70 mm/s (range -1.27 to 5.51)
+median pitch 25.0 deg (range 14.5 to 61.8)
+upright in 2 of 5 trials
+```
+
+The fly sometimes walks backwards. It falls over more often than not.
+
+Across every gait setting previously reported as good, none keeps the body
+upright in a majority of trials:
+
+```
+period  swing  lift  toe   median speed   median pitch   upright
+45      0.2    0.5   0.4   5.88 mm/s      71.5 deg       1/5
+45      0.2    0.3   0.0   3.26           34.2           0/5
+30      0.3    0.7   0.0   1.94           37.1           0/5
+60      0.2    0.3   0.2   7.05           37.8           0/5
+30      0.2    0.5   0.2   3.70           25.0           2/5
+```
+
+### What is and is not true
+
+**True:** the mechanics permit walking. Trajectories exist in which the body
+travels 16 mm in two seconds and stays upright, and they are not flukes of a
+broken solver -- they are real solutions of a body that now has correct leg
+proportions, a jointed tarsus lying flat on the ground, and six legs that
+agree about which way a joint lifts.
+
+**Not true, and previously claimed:** that the body *can walk* in any useful
+sense. It does not walk repeatably. The imposed tripod produces locomotion
+from some starting states and a fall from most.
+
+The earlier sections are left as written rather than silently edited, because
+the sequence of reasoning is the useful part and quietly correcting numbers
+would hide how the error survived so long.
+
+### Why this strengthens rather than overturns finding 14
+
+Finding 14 concluded that an open-loop pattern cannot walk this body and that
+it wants a controller. That conclusion was right and is now much better
+supported: a gait that falls over under a 1.5% perturbation is not marginally
+stable, it is unstable, and no choice of sine-wave parameters fixes it.
+
+It also explains why the postural controller in finding 14 looked like it was
+failing. It was being scored on single runs of a process whose single runs
+mean nothing. Whether feedback helps is still open -- the question simply has
+not been asked properly yet, and now it can be.
+
+### The harness change
+
+`flyphys --gait` defaults to five trials and reports the median with its
+range, and its verdict is "not a repeatable gait" unless the body stays
+upright in a majority. A single trial is still available as the last argument
+and prints the familiar detailed trace, but it now says "one trial only --
+run several" rather than "the body can walk when driven correctly".
+
+The default test currently fails. That is correct: the thing it tests does not
+yet work.

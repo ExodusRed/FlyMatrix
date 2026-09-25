@@ -34,6 +34,7 @@ struct Result {
     float travelX;
     std::size_t contacts;
     float anchorError;
+    std::size_t worstAnchor;
     float footLateral;
     float angle[kJointCount];
     // Worst joint deviation across all six legs, not just the one we
@@ -70,6 +71,8 @@ float g_substep = -1.0f;
 float g_tarsus = -1.0f;
 float g_minseg = -1.0f;
 float g_friction = -1.0f;
+float g_mintar = -1.0f;
+int g_inter = -1;
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
@@ -81,6 +84,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
+    if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
@@ -93,6 +97,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_baum > 0.0f) phys.world.params.baumgarte = g_baum;
     if (g_corr > 0.0f) phys.world.params.maxCorrectionVelocity = g_corr;
     if (g_friction > 0.0f) phys.world.params.friction = g_friction;
+    if (g_inter >= 0) phys.world.params.interleave = (g_inter != 0);
 
     const int n = static_cast<int>(ms / 1000.0f / kDt);
     Result r{};
@@ -109,6 +114,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     r.peak = phys.peakHeight();
     r.contacts = phys.world.contacts.size();
     r.anchorError = phys.world.maxAnchorError();
+    r.worstAnchor = phys.world.worstAnchorJoint();
     r.feetDown = 0;
     r.thoraxDown = r.abdomenDown = r.headDown = false;
     {
@@ -128,11 +134,12 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     }
     {
         // How far the front-left foot has slid from where it started.
-        std::vector<FlyBody::SegmentPose> pose;
-        phys.readPose(pose);
-        const V3 foot = pose[kJointCount - 1].b;
-        const V3 want = skeleton.footPosition(LegId::FrontL);
-        r.footLateral = length(foot - want);
+        //
+        // Taken from footPosition rather than pose[kJointCount - 1], which
+        // was the whole tarsus until it was split into five tarsomeres and
+        // is now ta1 -- 40% of the way along the foot.
+        r.footLateral = length(phys.footPosition(0) -
+                               skeleton.footPosition(LegId::FrontL));
     }
     for (int j = 0; j < kJointCount; ++j) r.angle[j] = phys.jointAngle(0, j);
     r.worstAngle = 0.0f;
@@ -171,20 +178,24 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
         r.pitchDeg = std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f;
     }
     {
-        std::vector<FlyBody::SegmentPose> pose;
-        phys.readPose(pose);
-        const V3 foot = pose[kJointCount - 1].b;
-        r.reach = length(foot - phys.world.bodies[0].position);
+        r.reach = length(phys.footPosition(0) - phys.world.bodies[0].position);
         r.reachRest = length(skeleton.footPosition(LegId::FrontL) -
                              skeleton.root.position);
 
+        // Per-leg compression: coxa to foot now, against coxa to foot at
+        // rest. Both sides have to mean the same thing, and for a while they
+        // did not -- the physics side stopped at ta1 while the skeleton side
+        // ran to the end of its single unsplit tarsus, so this differenced
+        // two different lengths and reported the gap as compression.
+        std::vector<FlyBody::SegmentPose> pose;
+        phys.readPose(pose);
         std::vector<FlyBody::SegmentPose> restPose;
         skeleton.worldPose(restPose);
         for (int l = 0; l < kLegCount; ++l) {
             const std::size_t base = static_cast<std::size_t>(l) * kJointCount;
-            const float now = length(pose[base + kJointCount - 1].b - pose[base].a);
-            const float was =
-                length(restPose[base + kJointCount - 1].b - restPose[base].a);
+            const float now = length(phys.footPosition(l) - pose[base].a);
+            const float was = length(skeleton.footPosition(static_cast<LegId>(l)) -
+                                     restPose[base].a);
             r.legShort[l] = now - was;
         }
     }
@@ -208,6 +219,7 @@ int traceOne(const std::string& jointName_, float drive) {
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
+    if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = joint;
@@ -250,29 +262,104 @@ int traceOne(const std::string& jointName_, float drive) {
 // hind-left swing together while the other three are in stance. Within a leg,
 // ThC retracts through stance to push the body forward, and during swing CTr
 // lifts the foot clear while ThC protracts to reset it.
+// One gait trial. `jitter` displaces the starting pose very slightly, which
+// is how the same gait is asked the same question several times.
+struct GaitResult {
+    float speed = 0.0f, stride = 0.0f, duty = 0.0f, pitch = 0.0f;
+    float height = 0.0f;
+    bool upright = false;
+};
+
+GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
+                     float postureGain, float postureRate, float jitter,
+                     bool verbose);
+
+// Run the same gait several times from slightly different starting states and
+// report the spread.
+//
+// A single two-second run is not a property of the gait. Three separate
+// changes that altered no physics at all -- caching the world inertia,
+// splitting solveJoints into passes, and re-solving the rest pose -- each
+// moved the headline walking figure by a factor of two or more, because the
+// system is chaotically sensitive and one trajectory is one sample. Reporting
+// a median across perturbed starts gives a number that survives a recompile.
 int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
-             float postureGain, float postureRate) {
+             float postureGain, float postureRate, int trials) {
+    if (trials <= 1) {
+        const GaitResult r = gaitTrial(periodMs, amplitude, lift, toeLift,
+                                       postureGain, postureRate, 0.0f, true);
+        return r.upright && std::fabs(r.speed) > 0.5f ? 0 : 2;
+    }
+
+    std::printf("=== gait: imposed tripod, NOT driven by the connectome ===\n");
+    std::printf("period %.0f ms (%.1f Hz), ThC swing %.2f rad, CTr lift %.2f, "
+                "toe %.2f\n", periodMs, 1000.0f / periodMs, amplitude, lift,
+                toeLift);
+    std::printf("%d trials from perturbed starts\n\n", trials);
+    std::printf("%8s %10s %10s %8s %8s\n",
+                "jitter", "speed", "stride", "duty", "pitch");
+
+    std::vector<float> speeds, pitches;
+    int upright = 0;
+    for (int k = 0; k < trials; ++k) {
+        // Spread the perturbation either side of the nominal start.
+        const float jit = 0.004f * (static_cast<float>(k) -
+                                    0.5f * static_cast<float>(trials - 1));
+        const GaitResult r = gaitTrial(periodMs, amplitude, lift, toeLift,
+                                       postureGain, postureRate, jit, false);
+        speeds.push_back(r.speed);
+        pitches.push_back(r.pitch);
+        if (r.upright) ++upright;
+        std::printf("%+8.3f %10.2f %10.3f %8.2f %8.1f\n",
+                    jit, r.speed, r.stride, r.duty, r.pitch);
+    }
+    std::sort(speeds.begin(), speeds.end());
+    std::sort(pitches.begin(), pitches.end());
+    const float medS = speeds[speeds.size() / 2];
+    const float medP = pitches[pitches.size() / 2];
+    std::printf("\nmedian speed %.2f mm/s (range %.2f to %.2f), "
+                "median pitch %.1f deg (range %.1f to %.1f)\n",
+                medS, speeds.front(), speeds.back(),
+                medP, pitches.front(), pitches.back());
+    std::printf("upright in %d of %d trials\n", upright, trials);
+    std::printf("  -> %s\n", (upright * 2 >= trials && std::fabs(medS) > 0.5f)
+        ? "the body can walk when driven correctly"
+        : "not a repeatable gait");
+    return (upright * 2 >= trials && std::fabs(medS) > 0.5f) ? 0 : 2;
+}
+
+GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
+                     float postureGain, float postureRate, float jitter,
+                     bool verbose) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
+    if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     phys.params.useManualTarget = true;
+    // Displace the starting height very slightly. Enough that the trajectory
+    // differs, far too little to change what the gait is being asked to do.
+    skeleton.root.position.z += jitter;
     phys.build(skeleton);
     if (g_iters > 0) phys.world.params.iterations = g_iters;
     if (g_friction > 0.0f) phys.world.params.friction = g_friction;
+    if (g_inter >= 0) phys.world.params.interleave = (g_inter != 0);
 
     // Tripod A = front_L, middle_R, hind_L; tripod B is the other three.
     const bool tripodA[kLegCount] = {true, false, false, true, true, false};
 
     const float startX = phys.thorax().position.x;
     const float startZ = phys.bodyHeight();
-    std::printf("=== gait: imposed tripod, NOT driven by the connectome ===\n");
-    std::printf("period %.0f ms (%.1f Hz), amplitude %.1f\n\n",
-                periodMs, 1000.0f / periodMs, amplitude);
-    std::printf("%8s %10s %10s %9s %9s\n",
-                "t (ms)", "x (mm)", "height", "contacts", "pitch");
+    if (verbose) {
+        std::printf("=== gait: imposed tripod, NOT driven by the connectome ===\n");
+        std::printf("period %.0f ms (%.1f Hz), ThC swing %.2f rad, "
+                    "CTr lift %.2f, toe %.2f\n\n",
+                    periodMs, 1000.0f / periodMs, amplitude, lift, toeLift);
+        std::printf("%8s %10s %10s %9s %9s\n",
+                    "t (ms)", "x (mm)", "height", "contacts", "pitch");
+    }
 
     const int n = static_cast<int>(2000.0f / 1000.0f / kDt);
     float worstPitch = 0.0f;
@@ -385,10 +472,10 @@ int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
             }
         }
         if (!std::isfinite(phys.bodyHeight())) {
-            std::printf("DIVERGED at %.0f ms\n", t);
-            return 2;
+            if (verbose) std::printf("DIVERGED at %.0f ms\n", t);
+            return {};
         }
-        if (i % (n / 10) == 0 || i == n - 1) {
+        if (verbose && (i % (n / 10) == 0 || i == n - 1)) {
             std::printf("%8.0f %10.4f %10.4f %9zu %9.2f\n",
                         t, phys.thorax().position.x - startX, phys.bodyHeight(),
                         phys.world.contacts.size(), pitch);
@@ -407,22 +494,35 @@ int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
     // fly walking fast is near 0.5; a fly with every foot down all the time
     // is dragging.
     const float meanFeet = contactSum / static_cast<float>(n);
-    std::printf("foot sweep %.3f mm relative to body, of which %.3f mm "
-                "loaded\n", footRelMax - footRelMin,
+    if (verbose) std::printf("foot sweep %.3f mm relative to body, of which "
+                "%.3f mm loaded\n", footRelMax - footRelMin,
                 (stanceRelMax > stanceRelMin) ? stanceRelMax - stanceRelMin : 0.0f);
-    std::printf("stride %.3f mm at %.1f Hz, mean feet down %.2f of 6 "
+    if (verbose) std::printf("stride %.3f mm at %.1f Hz, mean feet down %.2f of 6 "
                 "(duty %.2f)\n", strideMm, stepHz, meanFeet, meanFeet / 6.0f);
-    std::printf("\ntravelled %+.3f mm in 2.0 s (%.2f mm/s), height %.3f -> %.3f, "
-                "worst pitch %.1f deg\n",
+    if (verbose) std::printf("\ntravelled %+.3f mm in 2.0 s (%.2f mm/s), "
+                "height %.3f -> %.3f, worst pitch %.1f deg\n",
                 travel, travel / 2.0f, startZ, held, worstPitch);
     // A walking fly does a few body lengths a second; 1 mm/s is slow but it is
     // locomotion rather than twitching in place.
     const bool moved = std::fabs(travel) > 1.0f;
     const bool upright = held > 0.40f && worstPitch < 25.0f;
-    std::printf("  -> %s\n", (moved && upright)
-        ? "the body can walk when driven correctly"
-        : (!moved ? "no net travel" : "travelled but did not stay upright"));
-    return (moved && upright) ? 0 : 2;
+    if (verbose) {
+        // Deliberately not "the body can walk". One trial is one sample of a
+        // chaotically sensitive system, and reading a single run as a
+        // capability is exactly the mistake this project made twice.
+        std::printf("  -> %s (one trial only -- run several)\n",
+            (moved && upright) ? "travelled and stayed upright"
+            : (!moved ? "no net travel" : "travelled but did not stay upright"));
+    }
+
+    GaitResult out;
+    out.speed = travel / 2.0f;
+    out.stride = strideMm;
+    out.duty = meanFeet / 6.0f;
+    out.pitch = worstPitch;
+    out.height = held;
+    out.upright = moved && upright;
+    return out;
 }
 
 int main(int argc, char** argv) {
@@ -473,7 +573,7 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gait") == 0) {
-            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 45.0f;
+            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 30.0f;
             // Radians of ThC swing, not an abstract drive number.
             const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.2f;
             // Lift defaults well above the swing amplitude. Tied to it at
@@ -497,14 +597,21 @@ int main(int argc, char** argv) {
             // pitch under 20.
             const float toe = (i + 4 < argc && argv[i + 4][0] != '-')
                                   ? std::stof(argv[i + 4])
-                                  : 0.4f;
+                                  : 0.2f;
             const float pg = (i + 5 < argc && argv[i + 5][0] != '-')
                                  ? std::stof(argv[i + 5])
                                  : 0.0f;
             const float pr = (i + 6 < argc && argv[i + 6][0] != '-')
                                  ? std::stof(argv[i + 6])
                                  : 0.0f;
-            return gaitTest(periodMs, amp, lift, toe, pg, pr);
+            // Several trials by default, because one is what misled this
+            // project for two sessions. A single run said 8.37 mm/s upright;
+            // nine runs from starts differing by 16 um said the fly stays
+            // upright once in nine and sometimes walks backwards.
+            const int tr = (i + 7 < argc && argv[i + 7][0] != '-')
+                               ? std::atoi(argv[i + 7])
+                               : 5;
+            return gaitTest(periodMs, amp, lift, toe, pg, pr, tr);
         }
     }
 
@@ -527,14 +634,17 @@ int main(int argc, char** argv) {
                 base.thoraxDown ? " + THORAX" : "",
                 base.abdomenDown ? " + ABDOMEN" : "",
                 base.headDown ? " + HEAD" : "");
-    std::printf("  max joint anchor error %.4f mm   front foot moved %.4f mm\n",
-                base.anchorError, base.footLateral);
+    std::printf("  max joint anchor error %.4f mm at joint %zu"
+                "   front foot moved %.4f mm\n",
+                base.anchorError, base.worstAnchor, base.footLateral);
     if (base.anchorError > 0.02f) {
         std::printf("  WARNING: the linkage is stretching, not just bending\n");
     }
-    // Six feet, plus any trunk probe. More than six means the fly has sagged
-    // onto its belly, and no leg can lift a body already resting on the floor.
-    if (base.contacts > 6) {
+    // Contact count alone no longer says anything about the trunk. With the
+    // tarsus lying flat every leg contributes several contacts -- a healthy
+    // standing fly has 22 -- so ask the trunk probes directly instead of
+    // inferring from a total that used to be six.
+    if (base.thoraxDown || base.abdomenDown || base.headDown) {
         std::printf("  WARNING: %zu contacts -- the trunk is on the ground\n",
                     base.contacts);
     }

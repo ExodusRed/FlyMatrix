@@ -195,6 +195,9 @@ public:
         float linearDamping = 0.02f;
         float angularDamping = 0.04f;
         float groundZ = 0.0f;
+        // Alternate one joint sweep with one contact sweep, instead of
+        // running every joint iteration and then every contact one.
+        bool interleave = false;
 
         // The arena: an axis-aligned box the fly is contained by.
         //
@@ -257,6 +260,8 @@ public:
     // grows under load the linkage is stretching, and every downstream
     // measurement is describing a body that is quietly falling apart.
     float maxAnchorError() const;
+    // Index of the joint carrying that error, for locating it.
+    std::size_t worstAnchorJoint() const;
 
     // Rate of change of a hinge's angle, rad/s, positive in the same
     // direction the angle is measured.
@@ -265,8 +270,11 @@ public:
 private:
     void integrateVelocities(float dt);
     void clampVelocities();
-    void solveJoints(float dt);
-    void solveContacts(float dt);
+    void beginJoints();
+    void jointPass(float dt);
+    void beginContacts();
+    void contactPass(float dt);
+    void endContacts();
     void integratePositions(float dt);
     void buildGroundContacts();
 

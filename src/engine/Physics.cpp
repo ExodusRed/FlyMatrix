@@ -97,6 +97,21 @@ float PhysicsWorld::jointAngle(const HingeJoint& j) const {
     return std::atan2(s, c);
 }
 
+std::size_t PhysicsWorld::worstAnchorJoint() const {
+    float worst = 0.0f;
+    std::size_t which = 0;
+    for (std::size_t i = 0; i < joints.size(); ++i) {
+        const HingeJoint& j = joints[i];
+        const RigidBody& A = bodies[j.a];
+        const RigidBody& B = bodies[j.b];
+        const V3 pA = A.position + A.orientation.rotate(j.anchorA);
+        const V3 pB = B.position + B.orientation.rotate(j.anchorB);
+        const float e = length(pB - pA);
+        if (e > worst) { worst = e; which = i; }
+    }
+    return which;
+}
+
 float PhysicsWorld::maxAnchorError() const {
     float worst = 0.0f;
     for (const auto& j : joints) {
@@ -152,9 +167,10 @@ void PhysicsWorld::clampVelocities() {
     }
 }
 
-void PhysicsWorld::solveJoints(float dt) {
-    const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
-
+// Warm starting and accumulator reset, done once per substep before any
+// sweeping. Split out of solveJoints so the joint and contact sweeps can be
+// interleaved -- see PhysicsWorld::step.
+void PhysicsWorld::beginJoints() {
     for (auto& j : joints) {
         j.servoImpulse = 0.0f;
         j.muscleImpulse = 0.0f;
@@ -183,7 +199,12 @@ void PhysicsWorld::solveJoints(float dt) {
     }
     for (auto& j : joints) j.accumulated = {};
 
-    for (int it = 0; it < params.iterations; ++it) {
+}
+
+// One Gauss-Seidel sweep over every joint.
+void PhysicsWorld::jointPass(float dt) {
+    const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
+    {
         // Joints are swept in the order they were built, which is root to tip
         // along each leg. Alternating the sweep direction is the textbook way
         // to speed up Gauss-Seidel on a chain, and it was tried here: it made
@@ -461,14 +482,16 @@ void PhysicsWorld::buildGroundContacts() {
     }
 }
 
-void PhysicsWorld::solveContacts(float dt) {
-    const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
-
+void PhysicsWorld::beginContacts() {
     // Keyed on (probe, plane): a foot can touch the floor and a wall at
     // the same time and each contact needs its own carried impulse.
     probeImpulse.assign(probes.size() * kPlaneCount, 0.0f);
+}
 
-    for (int it = 0; it < params.iterations; ++it) {
+// One sweep over every contact.
+void PhysicsWorld::contactPass(float dt) {
+    const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
+    {
         for (auto& c : contacts) {
             RigidBody& b = bodies[c.body];
             const V3 r = b.orientation.rotate(c.localPoint);
@@ -520,6 +543,10 @@ void PhysicsWorld::solveContacts(float dt) {
         }
     }
 
+}
+
+// Carry each contact's impulse into the next substep.
+void PhysicsWorld::endContacts() {
     for (const auto& c : contacts) {
         const std::size_t key =
             static_cast<std::size_t>(c.probe) * kPlaneCount + c.plane;
@@ -567,8 +594,32 @@ void PhysicsWorld::step(float dt) {
     for (auto& b : bodies) b.refreshInertiaWorld();
     integrateVelocities(dt);
     buildGroundContacts();
-    solveJoints(dt);
-    solveContacts(dt);
+
+    // Joints and contacts are solved *together*, alternating one sweep of
+    // each, rather than every joint iteration followed by every contact
+    // iteration.
+    //
+    // Run sequentially, the contact impulses land after the joints have
+    // finished converging and nothing puts the joints back. That showed up
+    // exactly where it should: at the distal tarsomeres, tiny bodies at the
+    // end of a nine-link chain and the ones actually touching the ground.
+    // Worst joint anchor error was 0.0617 mm with the tarsomere contact
+    // probes on against 0.0075 mm with them off, and it did not move across
+    // a fourfold change in tarsomere mass -- which ruled out conditioning
+    // and pointed here.
+    beginJoints();
+    beginContacts();
+    if (params.interleave) {
+        for (int it = 0; it < params.iterations; ++it) {
+            jointPass(dt);
+            contactPass(dt);
+        }
+    } else {
+        for (int it = 0; it < params.iterations; ++it) jointPass(dt);
+        for (int it = 0; it < params.iterations; ++it) contactPass(dt);
+    }
+    endContacts();
+
     clampVelocities();
     integratePositions(dt);
 }
