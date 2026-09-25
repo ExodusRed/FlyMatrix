@@ -1500,8 +1500,9 @@ is the opposite of what +/-15 reported. `kJointDriveSign` and the postural
 controller both read their signs off this test, so both were being set from a
 fly being thrown into the air.
 
-The default is now 3, with `--probe-drive` to change it. Anyone altering
-`maxMuscleTorque` should re-check that this still lands in the range where the
+The default became 3, with `--probe-drive` to change it -- and 3 turned out to
+be wrong too. Section 18 measures the usable window and settles on 1.5. Anyone
+altering `maxMuscleTorque` should re-check that this still lands where the
 response is a lift rather than a launch.
 
 One consolation: the postural controller of finding 14 had the right sign
