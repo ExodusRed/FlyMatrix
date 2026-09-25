@@ -1579,3 +1579,102 @@ difference far inside the chaotic spread of that measurement, and Kenyon cells
 and APL sit at exactly 0.6200 mm either way. There is no evidence to justify
 the change, so it is left as measured and the ambiguity is recorded in the
 table rather than resolved by preference.
+
+
+---
+
+## 19. The fly was not falling over. It was launching itself.
+
+Finding 16 established that the gait was not repeatable and finding 14 that it
+wanted a controller. Three controllers were tried and every one made it worse,
+which is a strong enough signal to stop building controllers and look at what
+actually happens.
+
+### The failure is a takeoff
+
+Tracing a single failing trial, with contacts and height:
+
+```
+  t (ms)      x (mm)   height   contacts
+    1393       5.500    0.531      7
+    1592       3.746    0.676      0     <- airborne
+    1791      -5.976    6.143      0     <- 6.1 mm up
+    1990      19.205    0.718     19     <- lands 19 mm further on
+```
+
+The body leaves the ground entirely and reaches 6.1 mm, eleven times its ride
+height, on a fly whose legs are driven by nothing but a sine wave. It is not
+losing its balance. **The gait is pumping energy into the body until it
+catapults.**
+
+That explains the three failed controllers at a stroke. Every one of them
+worked by adding more motion to the joint targets -- extending a leg further,
+placing a foot differently -- and more target motion is more energy into a
+system that was already overfilled. They were not failing to stabilise; they
+were feeding the thing that throws the fly.
+
+### Why the joints pump
+
+The joints are position-servoed with a large torque budget, and the gait moves
+their targets at 33 Hz. A servo whose target jumps while its foot is planted
+does not gently reposition the leg -- it shoves against the ground. Finding 18
+had already noted that joint drive is not graded: below a threshold the servo
+holds, above it the joint slams to its stop. At gait frequencies that is a
+pump.
+
+A real muscle is not a position servo. It is compliant, and it dissipates.
+
+### What works
+
+Slowing the step frequency, which gives the servo time to reach its target
+before the target moves again:
+
+```
+period    median speed   median pitch   upright
+ 30 ms      2.82 mm/s      28.3 deg       2/5
+ 60         4.85           30.1           2/5
+100         6.24           77.1           0/5
+160         1.67           17.3           5/9
+190         4.42           34.0           2/9
+```
+
+Confirmed as a basin rather than a spike, at nine trials each: 130 ms gives
+5/9 and 160 ms gives 5/9, with 190 falling away to 2/9.
+
+**This is the first configuration in the project that walks in a majority of
+trials.** The default is now 160 ms.
+
+Speed cannot be bought back through stride, either: at that period a swing of
+0.35 rad gives 0 of 9 upright and 0.5 rad likewise. Amplitude pumps energy the
+same way frequency does.
+
+### What it costs, stated plainly
+
+```
+median speed    1.67 mm/s   (a real fly walks at 10-25)
+median pitch    17.3 deg
+step frequency  6.25 Hz     (a real fly steps at 10-20)
+upright         5 of 9 trials
+```
+
+So: about a sixth of a real fly's speed, at half its step frequency, staying
+upright a little over half the time. That is a long way from an animal, and it
+is the first honest "it walks" this project has been able to write.
+
+The verdict line reports the fraction now -- "walks in a majority of trials
+(5 of 9 upright)" -- rather than rounding a bare majority up to a capability.
+
+### Where the ceiling actually is
+
+The ceiling is not control and not the gait pattern. It is that
+`applyDrive` gives the model a stiff position servo where an animal has a
+compliant, dissipative actuator, and a stiff servo driven cyclically is a
+pump. Everything else follows from that: why fast stepping launches the fly,
+why bigger strides launch it, why adding corrective motion makes it worse, and
+why the usable probe window in finding 18 is so narrow.
+
+The Hill muscle model added in an earlier session is exactly the right idea and
+is currently bypassed on the walking path, which uses `useManualTarget` and the
+posture servo directly. Giving the gait a force-based, force-velocity-damped
+actuator instead of a position target is the obvious next thing to try, and it
+is a change to the muscle model rather than to the controller.

@@ -532,14 +532,20 @@ python tools/cpg_probe.py --joint ThC --leg middle_L
 python tools/feco_split.py --all-legs
 ```
 
-**The body does not walk repeatably.** It walks from some starting states and
-falls over from most:
+The body walks, slowly, in a majority of trials:
 
 ```
-median speed 3.70 mm/s (range -1.27 to 5.51)
-median pitch 25.0 deg (range 14.5 to 61.8)
-upright in 2 of 5 trials
+median speed 1.67 mm/s (range 0.19 to 5.03)
+median pitch 17.3 deg (range 10.7 to 81.3)
+upright in 5 of 9 trials
 ```
+
+That is about a sixth of a real fly's speed at half its step frequency, and it
+took finding out why the fly fell over. It was not falling: the gait pumps
+energy into the body until it **launches**, reaching 6.1 mm -- eleven times its
+ride height -- driven by nothing but a sine wave. Slowing the step to 6.25 Hz
+gives the position servos time to reach their targets instead of shoving
+against the ground, and that is the whole of the fix.
 
 Those five trials differ only in starting height, by 8 um against a ride
 height of 550 um. The fly sometimes walks backwards.

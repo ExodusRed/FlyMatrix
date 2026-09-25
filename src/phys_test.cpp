@@ -297,9 +297,43 @@ struct GaitResult {
     bool upright = false;
 };
 
-GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
-                     float postureGain, float postureRate, float jitter,
-                     bool verbose);
+struct GaitParams {
+    // 160 ms is 6.25 Hz, well below a real fly's 10-20, and it is chosen
+    // because it is the only regime that walks repeatably. Faster stepping
+    // does not merely destabilise the fly, it launches it: the gait pumps
+    // energy in until the body leaves the ground entirely. See findings 19.
+    float periodMs = 160.0f;
+    float swing = 0.2f;    // ThC fore-aft amplitude, radians
+    float lift = 0.5f;     // CTr lift during swing
+    float toe = 0.2f;      // TiTa curl during swing, so a flat tarsus clears
+
+    // --- stabilisation, all hand-built and none of it neural ---
+    //
+    // postureGain/postureRate change how far a leg *extends*, from body
+    // attitude and its rate. That is a stiffness response.
+    float postureGain = 0.0f;
+    float postureRate = 0.0f;
+
+    // stepGain changes where a foot is *placed*, from how fast the body is
+    // travelling.
+    //
+    // This is the lever that actually stabilises legged locomotion, and it
+    // was missing. A running machine or animal does not stay upright by
+    // stiffening its legs; it stays upright by putting the next foot down
+    // ahead of where its momentum is carrying it, further ahead the faster
+    // it goes. Raibert's rule, and the reason the first hopping robots
+    // worked. In this model ThC sets fore-aft foot position directly, so the
+    // whole of it is one term: shift the swing target by k times forward
+    // velocity.
+    float stepGain = 0.0f;
+
+    int trials = 5;
+    // Starting-height offset for a single verbose trial, so a particular
+    // failing trajectory can be reproduced and watched.
+    float jitter = 0.0f;
+};
+
+GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose);
 
 // Run the same gait several times from slightly different starting states and
 // report the spread.
@@ -310,18 +344,18 @@ GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
 // moved the headline walking figure by a factor of two or more, because the
 // system is chaotically sensitive and one trajectory is one sample. Reporting
 // a median across perturbed starts gives a number that survives a recompile.
-int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
-             float postureGain, float postureRate, int trials) {
+int gaitTest(const GaitParams& gp) {
+    const int trials = gp.trials;
     if (trials <= 1) {
-        const GaitResult r = gaitTrial(periodMs, amplitude, lift, toeLift,
-                                       postureGain, postureRate, 0.0f, true);
+        const GaitResult r = gaitTrial(gp, gp.jitter, true);
         return r.upright && std::fabs(r.speed) > 0.5f ? 0 : 2;
     }
 
     std::printf("=== gait: imposed tripod, NOT driven by the connectome ===\n");
-    std::printf("period %.0f ms (%.1f Hz), ThC swing %.2f rad, CTr lift %.2f, "
-                "toe %.2f\n", periodMs, 1000.0f / periodMs, amplitude, lift,
-                toeLift);
+    std::printf("period %.0f ms (%.1f Hz), swing %.2f, lift %.2f, toe %.2f\n",
+                gp.periodMs, 1000.0f / gp.periodMs, gp.swing, gp.lift, gp.toe);
+    std::printf("pgain %.2f, prate %.4f, step %.4f\n",
+                gp.postureGain, gp.postureRate, gp.stepGain);
     std::printf("%d trials from perturbed starts\n\n", trials);
     std::printf("%8s %10s %10s %8s %8s\n",
                 "jitter", "speed", "stride", "duty", "pitch");
@@ -332,8 +366,7 @@ int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
         // Spread the perturbation either side of the nominal start.
         const float jit = 0.004f * (static_cast<float>(k) -
                                     0.5f * static_cast<float>(trials - 1));
-        const GaitResult r = gaitTrial(periodMs, amplitude, lift, toeLift,
-                                       postureGain, postureRate, jit, false);
+        const GaitResult r = gaitTrial(gp, jit, false);
         speeds.push_back(r.speed);
         pitches.push_back(r.pitch);
         if (r.upright) ++upright;
@@ -349,15 +382,23 @@ int gaitTest(float periodMs, float amplitude, float lift, float toeLift,
                 medS, speeds.front(), speeds.back(),
                 medP, pitches.front(), pitches.back());
     std::printf("upright in %d of %d trials\n", upright, trials);
-    std::printf("  -> %s\n", (upright * 2 >= trials && std::fabs(medS) > 0.5f)
-        ? "the body can walk when driven correctly"
-        : "not a repeatable gait");
+    // Report the fraction rather than a verdict that rounds a bare majority
+    // up to "it walks". Five of nine is not the same claim as nine of nine.
+    const bool ok = upright * 2 >= trials && std::fabs(medS) > 0.5f;
+    std::printf("  -> %s (%d of %d upright)\n",
+                ok ? "walks in a majority of trials" : "not a repeatable gait",
+                upright, trials);
     return (upright * 2 >= trials && std::fabs(medS) > 0.5f) ? 0 : 2;
 }
 
-GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
-                     float postureGain, float postureRate, float jitter,
-                     bool verbose) {
+GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
+    const float periodMs = gp.periodMs;
+    const float amplitude = gp.swing;
+    const float lift = gp.lift;
+    const float toeLift = gp.toe;
+    const float postureGain = gp.postureGain;
+    const float postureRate = gp.postureRate;
+    const float stepGain = gp.stepGain;
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
@@ -409,7 +450,24 @@ GaitResult gaitTrial(float periodMs, float amplitude, float lift, float toeLift,
             // Retract through stance, protract through swing. `amplitude` is
             // now the ThC swing in radians -- a real fly's coxa swings on the
             // order of 0.3 rad -- rather than an abstract drive number.
-            phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] = -amplitude * s;
+            // Foot placement. Shift the whole swing target by how fast the
+            // body is travelling, so a fly carrying forward momentum puts its
+            // feet down further forward and catches itself, instead of
+            // stepping under a body that has already moved on.
+            //
+            // ThC positive is retraction, so forward velocity has to move the
+            // target negative to place the foot ahead of the body -- hence the
+            // minus. Backwards, this would accelerate the fall.
+            // Only the swing leg. Foot placement is a rule about where the
+            // next foot lands, and a planted foot cannot be placed anywhere
+            // -- shifting its target just drags the body along the ground.
+            // Applied to every leg at every phase it made things steadily
+            // worse: 2 of 5 trials upright at a gain of 0, 1 of 5 at 0.005,
+            // none at all above that.
+            const float vx = phys.thorax().velocity.x;
+            const float place = (c > 0.0f) ? stepGain * vx : 0.0f;
+            phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
+                -amplitude * s - place;
             // Lift only during swing, which is the half where the leg is
             // protracting. A leg that lifts during stance just drops the body.
             //
@@ -609,45 +667,24 @@ int main(int argc, char** argv) {
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--gait") == 0) {
-            const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 30.0f;
-            // Radians of ThC swing, not an abstract drive number.
-            const float amp = (i + 2 < argc) ? std::stof(argv[i + 2]) : 0.2f;
-            // Lift defaults well above the swing amplitude. Tied to it at
-            // 0.6 * amp the swing legs never cleared the ground and the fly
-            // scuffed along at a duty factor of 0.77.
-            //
-            // Period 30 with lift 0.7 is chosen as a basin rather than a
-            // peak: every lift from 0.35 to 0.9 at that period holds pitch
-            // between 9.0 and 11.3 degrees. At periods of 55 and 70 the same
-            // sweep has an edge where pitch jumps to 77-84, and picking a
-            // single fast-looking point next to one of those is how you get a
-            // result that a recompile can undo -- caching the world inertia,
-            // which changes no physics at all, moved the old default from
-            // 12.8 degrees of pitch to 43.5.
-            const float lift = (i + 3 < argc && argv[i + 3][0] != '-')
-                                   ? std::stof(argv[i + 3])
-                                   : 0.5f;
-            // Chosen for staying upright, not for speed. With a flat tarsus
-            // the fast settings all tumble: 26.8 mm/s at 87 degrees of pitch,
-            // 38.7 at 66. This is the quickest gait in the sweep that keeps
-            // pitch under 20.
-            const float toe = (i + 4 < argc && argv[i + 4][0] != '-')
-                                  ? std::stof(argv[i + 4])
-                                  : 0.2f;
-            const float pg = (i + 5 < argc && argv[i + 5][0] != '-')
-                                 ? std::stof(argv[i + 5])
-                                 : 0.0f;
-            const float pr = (i + 6 < argc && argv[i + 6][0] != '-')
-                                 ? std::stof(argv[i + 6])
-                                 : 0.0f;
-            // Several trials by default, because one is what misled this
-            // project for two sessions. A single run said 8.37 mm/s upright;
-            // nine runs from starts differing by 16 um said the fly stays
-            // upright once in nine and sometimes walks backwards.
-            const int tr = (i + 7 < argc && argv[i + 7][0] != '-')
-                               ? std::atoi(argv[i + 7])
-                               : 5;
-            return gaitTest(periodMs, amp, lift, toe, pg, pr, tr);
+            // Named rather than positional. Seven positional arguments was
+            // already one too many to remember, and the controller search
+            // adds more.
+            GaitParams gp;
+            for (int k = 1; k < argc - 1; ++k) {
+                const char* a = argv[k];
+                const char* v = argv[k + 1];
+                if (!std::strcmp(a, "--period")) gp.periodMs = std::stof(v);
+                else if (!std::strcmp(a, "--swing")) gp.swing = std::stof(v);
+                else if (!std::strcmp(a, "--lift")) gp.lift = std::stof(v);
+                else if (!std::strcmp(a, "--toe")) gp.toe = std::stof(v);
+                else if (!std::strcmp(a, "--pgain")) gp.postureGain = std::stof(v);
+                else if (!std::strcmp(a, "--prate")) gp.postureRate = std::stof(v);
+                else if (!std::strcmp(a, "--step")) gp.stepGain = std::stof(v);
+                else if (!std::strcmp(a, "--trials")) gp.trials = std::atoi(v);
+                else if (!std::strcmp(a, "--jitter")) gp.jitter = std::stof(v);
+            }
+            return gaitTest(gp);
         }
     }
 
