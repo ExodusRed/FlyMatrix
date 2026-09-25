@@ -1474,3 +1474,41 @@ run several" rather than "the body can walk when driven correctly".
 
 The default test currently fails. That is correct: the thing it tests does not
 yet work.
+
+
+---
+
+## 17. The diagnostic that the sign tables come from was measuring a launch
+
+Tests 2, 3 and 4 probe a joint by driving it and watching what the body does.
+The drive was +/-15 throughout, chosen when `maxMuscleTorque` was 5e5. It is
+now 2.7e6, which makes +/-15 about ten body weights on a single joint.
+
+The tests stopped measuring which way a joint lifts and started measuring how
+far it throws the animal. Height changes of 3.4, 10.3 and 19.8 mm on a fly
+that stands 0.55 mm off the ground are not lifts.
+
+Worse, it inverted the answers:
+
+```
+drive +/-15        CTr -15 all sink,  CTr +15 LEGS DISAGREE
+drive +/-3         CTr -3  all lift,  CTr +3  all sink
+```
+
+At +/-3, roughly two body weights on the joint, every leg agrees and the sign
+is the opposite of what +/-15 reported. `kJointDriveSign` and the postural
+controller both read their signs off this test, so both were being set from a
+fly being thrown into the air.
+
+The default is now 3, with `--probe-drive` to change it. Anyone altering
+`maxMuscleTorque` should re-check that this still lands in the range where the
+response is a lift rather than a launch.
+
+One consolation: the postural controller of finding 14 had the right sign
+after all. Its failure, re-measured across trials in finding 16, is real and
+not a sign error.
+
+This also cost an hour to find because a held .exe meant `--probe-drive` was
+silently doing nothing across three separate sweeps, all of which returned
+identical numbers. The project has been caught by stale binaries before; the
+tell is results that do not move when they certainly should.

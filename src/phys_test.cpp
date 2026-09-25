@@ -72,6 +72,20 @@ float g_tarsus = -1.0f;
 float g_minseg = -1.0f;
 float g_friction = -1.0f;
 float g_mintar = -1.0f;
+// Drive used by tests 2, 3 and 4 to probe a joint.
+//
+// It was +/-15 throughout, chosen when maxMuscleTorque was 5e5. At the
+// current 2.7e6 that is some ten body weights on a single joint, and the
+// tests stopped measuring which way a joint lifts and started measuring
+// how far it throws the animal -- height changes of 3.4, 10.3 and 19.8 mm
+// on a fly that stands 0.55 mm off the ground.
+//
+// Worse, it inverted the answers. At +/-15 the table said CTr -15 sinks and
+// the legs disagree about it; at +/-3, which is about two body weights on the
+// joint, CTr -3 lifts on every leg and CTr +3 sinks on every leg. The signs
+// the rest of the project reads off this test were being taken from a fly
+// being thrown into the air.
+float g_probeDrive = 3.0f;
 int g_inter = -1;
 float g_ms = 300.0f;
 bool g_standOnly = false;
@@ -563,6 +577,15 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--friction") == 0) {
             g_friction = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--mintar") == 0) {
+            g_mintar = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--interleave") == 0) {
+            g_inter = std::atoi(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--probe-drive") == 0) {
+            g_probeDrive = std::stof(argv[i + 1]);
+        }
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--stand-only") == 0) g_standOnly = true;
@@ -685,7 +708,7 @@ int main(int argc, char** argv) {
 
     bool anyLifts = false;
     for (int j = 0; j < kJointCount; ++j) {
-        for (const float d : {-15.0f, 15.0f}) {
+        for (const float d : {-g_probeDrive, g_probeDrive}) {
             const Result r = run(g_ms, j, d);
             const float moved = r.angle[j] - base.angle[j];
             const float lifted = r.height - base.height;
@@ -718,7 +741,7 @@ int main(int argc, char** argv) {
     std::printf("   verdict\n");
 
     for (int j = 0; j < kJointCount; ++j) {
-        for (const float d : {-15.0f, 15.0f}) {
+        for (const float d : {-g_probeDrive, g_probeDrive}) {
             std::printf("%-6s %+7.1f", jointName(static_cast<Joint>(j)), d);
             int up = 0, down = 0;
             for (int l = 0; l < kLegCount; ++l) {
@@ -749,7 +772,7 @@ int main(int argc, char** argv) {
     std::printf("%-6s %7s %11s %11s  %s\n",
                 "joint", "drive", "travel x", "height", "verdict");
     for (int j = 0; j < kJointCount; ++j) {
-        for (const float d : {-15.0f, 15.0f}) {
+        for (const float d : {-g_probeDrive, g_probeDrive}) {
             const Result r = run(g_ms, j, d);
             const float dx = r.travelX - base.travelX;
             const float dz = r.height - base.height;
