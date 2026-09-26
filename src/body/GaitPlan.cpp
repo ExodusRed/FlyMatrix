@@ -141,6 +141,7 @@ V3 footTarget(const GaitSpec& spec, float phase) {
 void GaitPlan::build(const GaitSpec& spec) {
     spec_ = spec;
     buildBasis();
+    buildFootGrid();
     FlyBody rester;
     float rest[kLegCount][kJointCount];
     V3 restFoot[kLegCount];
@@ -172,6 +173,67 @@ void GaitPlan::build(const GaitSpec& spec) {
             }
             foot_[l][k] = work.footPosition(id) - restFoot[l];
         }
+    }
+}
+
+void GaitPlan::buildFootGrid() {
+    FlyBody rester;
+    float rest[kJointCount];
+    FlyBody work;
+    for (int l = 0; l < kLegCount; ++l) {
+        const LegId id = static_cast<LegId>(l);
+        for (int j = 0; j < kJointCount; ++j) {
+            rest[j] = rester.angle(id, static_cast<Joint>(j));
+        }
+        const V3 restFoot = rester.footPosition(id);
+
+        // Warm start along each column from the row below it, and each new
+        // column from the previous column's base, so neighbouring grid cells
+        // land on the same branch of a redundant solution. Without that the
+        // interpolation crosses between postures and the leg snaps.
+        float column[kJointCount];
+        for (int j = 0; j < kJointCount; ++j) column[j] = rest[j];
+
+        for (int ix = 0; ix < kFootNX; ++ix) {
+            const float dx = kFootSpanX *
+                             (2.0f * ix / (kFootNX - 1) - 1.0f);
+            for (int j = 0; j < kJointCount; ++j) {
+                work.setAngle(id, static_cast<Joint>(j), column[j]);
+            }
+            for (int iz = 0; iz < kFootNZ; ++iz) {
+                const float dz = kFootSpanZ * iz / (kFootNZ - 1);
+                const V3 want = restFoot + V3{dx, 0.0f, dz};
+                const float r = solveFootIK(work, id, want, rest);
+                worstResidual_[l] = std::max(worstResidual_[l], r);
+                for (int j = 0; j < kJointCount; ++j) {
+                    footGrid_[l][ix][iz][j] =
+                        work.angle(id, static_cast<Joint>(j)) - rest[j];
+                }
+                if (iz == 0) {
+                    for (int j = 0; j < kJointCount; ++j) {
+                        column[j] = work.angle(id, static_cast<Joint>(j));
+                    }
+                }
+            }
+        }
+    }
+}
+
+void GaitPlan::jointsForFoot(int leg, float dx, float dz,
+                             float out[kJointCount]) const {
+    const float u = std::clamp((dx + kFootSpanX) / (2.0f * kFootSpanX),
+                               0.0f, 1.0f) * (kFootNX - 1);
+    const float v = std::clamp(dz / kFootSpanZ, 0.0f, 1.0f) * (kFootNZ - 1);
+    const int i0 = std::min(static_cast<int>(u), kFootNX - 2);
+    const int j0 = std::min(static_cast<int>(v), kFootNZ - 2);
+    const float fu = u - static_cast<float>(i0);
+    const float fv = v - static_cast<float>(j0);
+    for (int j = 0; j < kJointCount; ++j) {
+        const float a = footGrid_[leg][i0][j0][j] * (1.0f - fv) +
+                        footGrid_[leg][i0][j0 + 1][j] * fv;
+        const float b = footGrid_[leg][i0 + 1][j0][j] * (1.0f - fv) +
+                        footGrid_[leg][i0 + 1][j0 + 1][j] * fv;
+        out[j] = a * (1.0f - fu) + b * fu;
     }
 }
 

@@ -20,6 +20,7 @@
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
 #include "body/GaitPlan.h"
+#include "body/SensoryGait.h"
 
 using namespace fly;
 
@@ -426,6 +427,11 @@ struct GaitParams {
     // difference between feet, far less than a step.
     float shareClamp = 0.04f;
 
+    // Walk without a clock: per-leg state machines and coordination
+    // rules instead of an imposed tripod. See body/SensoryGait.h.
+    bool sensory = false;
+    SensoryGaitParams sg;
+
     // Steering, by stride length.
     //
     // Nothing in this model has ever measured which way the fly is
@@ -730,9 +736,12 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
 
     const HeightComp hc = solveHeightComp();
 
+    SensoryGait sensoryGait;
+    if (gp.sensory) sensoryGait.reset(gp.sg);
     GaitPlan plan;
     {
         GaitSpec spec;
+
         spec.periodMs = gp.periodMs;
         spec.strideMm = gp.strideMm;
         spec.liftMm = gp.liftMm;
@@ -808,7 +817,10 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     for (int i = 0; i < n; ++i) {
         const float t = i * kDt * 1000.0f;
         const float phase = 6.2831853f * t / periodMs;
-        if (gp.planned && gp.shareGain > 0.0f) {
+        if (gp.sensory) {
+            sensoryGait.update(kDt, phys, plan, phys.params.manualTarget);
+        }
+        if (!gp.sensory && gp.planned && gp.shareGain > 0.0f) {
             float load[kLegCount] = {};
             float total = 0.0f;
             int stanceCount = 0;
@@ -834,7 +846,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
                 }
             }
         }
-        for (int l = 0; l < kLegCount; ++l) {
+        for (int l = 0; !gp.sensory && l < kLegCount; ++l) {
             const float p = tripodA[l] ? phase : phase + 3.14159265f;
             const float s = std::sin(p);
             const float c = std::cos(p);
@@ -1102,6 +1114,16 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
         }
         std::printf("\n");
     }
+    if (verbose && gp.sensory) {
+        std::printf("\nper-leg, from the rules rather than a clock:\n");
+        std::printf("%-10s %8s %8s\n", "leg", "steps", "duty");
+        for (int l = 0; l < kLegCount; ++l) {
+            std::printf("%-10s %8d %8.2f\n", legName(static_cast<LegId>(l)),
+                        sensoryGait.stepsTaken(l), sensoryGait.dutyOf(l));
+        }
+        std::printf("rule deadlocks released by the timeout: %d\n",
+                    sensoryGait.timeouts());
+    }
     if (verbose) std::printf("foot sweep %.3f mm relative to body, of which "
                 "%.3f mm loaded\n", footRelMax - footRelMin,
                 (stanceRelMax > stanceRelMin) ? stanceRelMax - stanceRelMin : 0.0f);
@@ -1326,6 +1348,14 @@ int main(int argc, char** argv) {
                 else if (!std::strcmp(a, "--duty")) gp.duty = std::stof(v);
                 else if (!std::strcmp(a, "--share")) gp.shareGain = std::stof(v);
                 else if (!std::strcmp(a, "--yaw")) gp.yawGain = std::stof(v);
+                else if (!std::strcmp(a, "--sensory")) gp.sensory = true;
+                else if (!std::strcmp(a, "--speed")) gp.sg.speed = std::stof(v);
+                else if (!std::strcmp(a, "--swingms")) gp.sg.swingMs = std::stof(v);
+                else if (!std::strcmp(a, "--aep")) gp.sg.aep = std::stof(v);
+                else if (!std::strcmp(a, "--pep")) gp.sg.pep = std::stof(v);
+                else if (!std::strcmp(a, "--no-rule1")) gp.sg.rule1 = false;
+                else if (!std::strcmp(a, "--no-rule3")) gp.sg.rule3 = false;
+                else if (!std::strcmp(a, "--rule3frac")) gp.sg.rule3Frac = std::stof(v);
                 else if (!std::strcmp(a, "--yawrate")) gp.yawRateGain = std::stof(v);
                 else if (!std::strcmp(a, "--share-clamp")) gp.shareClamp = std::stof(v);
                 else if (!std::strcmp(a, "--joint-gait")) gp.planned = false;

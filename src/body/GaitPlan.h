@@ -72,14 +72,35 @@ public:
     // the sign is the other way".
     const float* basis(int leg, int axis) const { return basis_[leg][axis]; }
 
+    // Joint angles, relative to rest, that put this leg's foot at an
+    // arbitrary offset from where it rests.
+    //
+    // `targets()` above can only answer "where should this leg be at this
+    // point in the cycle", which presumes there is a cycle. A leg whose
+    // stance ends when it runs out of travel rather than when a clock says
+    // so has no phase to look up, so it needs to ask for a foot position
+    // directly. Solved by inverse kinematics over a grid at build time and
+    // interpolated here, because the linear `basis()` above is only accurate
+    // near the rest pose and a stride is not.
+    void jointsForFoot(int leg, float dx, float dz,
+                       float out[kJointCount]) const;
+
+    // Extent of that grid, millimetres. Asking outside it is clamped.
+    static constexpr int kFootNX = 41;
+    static constexpr int kFootNZ = 11;
+    static constexpr float kFootSpanX = 0.50f;
+    static constexpr float kFootSpanZ = 0.25f;
+
 private:
     GaitSpec spec_;
     float table_[kLegCount][kSamples][kJointCount] = {};
     V3 foot_[kLegCount][kSamples] = {};
     float worstResidual_[kLegCount] = {};
     float basis_[kLegCount][3][kJointCount] = {};
+    float footGrid_[kLegCount][kFootNX][kFootNZ][kJointCount] = {};
 
     void buildBasis();
+    void buildFootGrid();
 };
 
 // Where one foot should be at a point in its cycle, as an offset from its
