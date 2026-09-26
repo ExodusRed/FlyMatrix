@@ -1894,3 +1894,118 @@ harness said the fly was standing and walking correctly while it was visibly in
 pieces, because no measurement asked where the leg segments actually were. Two
 new tools exist now and should have existed long ago: `flyphys --foot` for a
 per-segment report, and `flybody --film` for capturing a sequence to watch.
+
+---
+
+## 22. The fly was not falling over. Its legs were being torn off.
+
+Twelve seconds of walking had never worked. Two seconds was fine -- nine trials
+out of nine upright -- and somewhere past that the animal always ended on its
+back. Four separate explanations were offered for it over this session and the
+last, and all four were wrong: accumulating pitch drift, missing foot
+placement, postural gain, and heading drift. Each was argued from a trace
+printed ten times in twelve seconds, which is not enough to see a single-frame
+event.
+
+### What every frame showed
+
+```
+  t (ms)   height   pitch   legs down   anchor error
+    2163   0.6038    4.46           6         0.0470
+    2164   0.6005    3.50           6         1.4211
+```
+
+The joint anchors separate by 1.4 mm in one step. Height, pitch and contact
+count are all still normal at that instant; the body is thrown afterwards. The
+fall is the wreckage, not the event.
+
+### Where the energy came from
+
+The position servo solved for a relative spin of
+
+```
+want = servoRate * error * invDt
+```
+
+At `servoRate` 0.9 and 8 kHz substeps that is **7200 rad/s for every radian of
+error**: erase the whole error inside a fraction of one substep, and demand
+more of it the finer the substep becomes. A leg joint never achieves it,
+because its bounded torque cannot accelerate that much inertia in 125 us. A
+distal tarsomere has almost no inertia, so it achieves it exactly.
+
+Measured, per constraint, as the largest spin each one injects:
+
+```
+                standing      walking
+servo             62,375      641,381
+joint limit            0    1,825,166
+axis               20,646    2,020,344
+```
+
+Standing, the fly's fastest body does 183 rad/s and the speed ceiling never
+fires. Walking, the distal tarsomere reaches 2.2 million rad/s and the ceiling
+fires 624,554 times in four seconds. That ceiling rescales one body's velocity
+without touching its neighbours, so every firing breaks a joint the solver has
+just satisfied. Thousands of times a second.
+
+### The fix
+
+Divide by a time constant instead of by the timestep, so the servo means the
+same thing at any substep rate:
+
+```
+want = error / tau
+```
+
+```
+tau (ms)   peak spin rad/s   12 s upright   bursts
+0.1125           2,222,792            0/5      5/5
+0.6                      -            0/5      5/5
+0.8                      -            1/5      3/5
+1.0                  3,005            4/5      1/5
+1.5                      -            2/5      3/5
+2.0                      -            0/5      5/5
+```
+
+Four of five upright at twelve seconds, where every configuration ever tried
+had been none of five.
+
+### What was ruled out first
+
+Each by experiment, not argument: solver iterations at 64, 128 and 256;
+substep rate at 8, 16 and 24 kHz; posture torque; tarsomere mass; tarsal
+stiffness; a tarsus-specific servo rate; both velocity ceilings; unclamped
+Baumgarte bias in the weld and axis constraints; and a stride-differential
+steering controller for the 9-degree heading drift.
+
+Two of those results point straight at the answer in hindsight. Raising the
+speed ceiling made things far worse -- anchor error to 1332 mm -- so the
+ceiling was protecting against the divergence rather than causing it. And the
+relationship between stride length and failure is not monotone: 0.02 and 0.10
+survive four seconds while 0.05, 0.16 and 0.24 do not. That is not a
+dose-response. It is a latent divergence that the gait merely decides when to
+trigger, and the surviving runs still had a tarsomere spinning at 13,000 rad/s.
+
+### This explains the chaos, again
+
+Finding 21 reframed the model's notorious sensitivity as a geometry bug. Most
+of the rest was this. Tying controller stiffness to the integrator means the
+simulation is a different dynamical system at every timestep, and the whole
+solve runs on a knife edge -- even standing, the servo is throwing 62,000 rad/s
+impulses around that happen to cancel.
+
+It is also why shortening the substep made walking worse rather than better,
+which had been recorded as evidence of chaos and is in fact just `invDt` in a
+gain.
+
+### And the picture still did not match
+
+`flybody` had its own gait: a two-joint sinusoid with no height correction, no
+foot planning and no load sharing. Every improvement measured in `flyphys` over
+three sessions had never once reached the 3D view that the work is actually
+judged by. It drives the shared `GaitPlan` now.
+
+That is the fourth time in this project that two copies of the same thing have
+quietly disagreed -- after the anatomy, the abdomen offset, and the joint
+limits. The pattern is consistent enough to be worth stating as a rule: if a
+number exists in two places, it is already wrong.
