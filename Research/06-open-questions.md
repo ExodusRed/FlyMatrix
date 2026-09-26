@@ -11,8 +11,9 @@ re-tries one of them.
 **Status:** raised the threshold, did not remove the cause.
 
 Stride 0.24 is stable (4 of 5 upright, 1 of 5 burst at 12 s). Stride 0.32
-bursts 5 of 5 at 12 s, as does 0.42. Even the *surviving* runs have a tarsomere spinning at 13,000
-rad/s against 183 rad/s when standing. The failure body is always the same:
+bursts 5 of 5 at 12 s, as does 0.42. Even the *surviving* runs have a tarsomere
+spinning at 13,000 rad/s against 183 rad/s when standing. The failure body is
+always the same:
 **link 8, the most distal tarsomere**, the free end of a nine-link chain of
 near-zero inertia driven by a stiff servo.
 
