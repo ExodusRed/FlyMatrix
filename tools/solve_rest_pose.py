@@ -29,6 +29,19 @@ GROUND_Z = 0.0
 ANKLE_Z = 0.020
 # Every joint down the leg must sit at least this far above the floor.
 GROUND_CLEARANCE = 0.015
+# Segment radii, matching the capsules FlyBody builds. A leg segment is not a
+# line: a femur whose axis sits 20 um up is 16 um through the floor, because
+# the femur is 36 um thick. The clearance test compared joint heights against
+# a single 15 um figure and so passed poses that were plainly underground.
+RADIUS = dict(coxa=0.045, troch=0.040, femur=0.036, tibia=0.028, tarsus=0.020)
+# Only the upper leg is held clear. The ankle and the tarsus are supposed to
+# be on the floor -- that is what standing is -- and their heights are set by
+# ANKLE_Z instead.
+CLEAR_RADII = [RADIUS["coxa"], RADIUS["troch"], RADIUS["femur"]]
+# Millimetres of fore-aft foot travel each leg must have in hand, each way,
+# before a joint reaches a stop. The gait that walks at 7.9 mm/s uses a
+# 0.475 mm stride, so 0.30 mm each way is that with room to spare.
+WANT_STRIDE = 0.30
 
 # Mirrors src/body/Anatomy.h. If these disagree the solved rest pose is
 # for a different animal than the one that gets built.
@@ -176,6 +189,52 @@ def flat_tarsus_angle(angles, attach, lengths, mount):
     return np.arctan2(np.sin(t), np.cos(t))
 
 
+def foot_jacobian(angles, attach, lengths, mount):
+    """d(foot) / d(angle), 3x5, millimetres per radian."""
+    eps = 1e-5
+    f0 = foot_position(angles, attach, lengths, mount)
+    J = np.zeros((3, 5))
+    for k in range(5):
+        bumped = angles.copy()
+        bumped[k] += eps
+        J[:, k] = (foot_position(bumped, attach, lengths, mount) - f0) / eps
+    return J
+
+
+def stride_travel(angles, attach, lengths, mount, limits):
+    """How far the foot can slide fore and aft before a joint hits a stop.
+
+    Standing on six feet is necessary and not sufficient: the leg then has to
+    be able to walk from there, which means translating its foot along the
+    ground -- not lifting it, not swinging it sideways -- in both directions.
+
+    Nothing asked for this and the pose that shipped fails it badly. The front
+    leg could move its foot 0.541 mm forward and 0.031 mm *backward*, because
+    its ankle sat 0.057 rad from its limit. Backward is the power stroke. A
+    front leg with thirty-one micrometres of it cannot push the animal along,
+    and measured at the joint it did the opposite: once the height correction
+    was applied its foot travelled forwards during stance while the other four
+    travelled back.
+
+    Returns millimetres of travel each way along the least-norm direction that
+    slides the foot forward at constant height.
+    """
+    J = foot_jacobian(angles, attach, lengths, mount)
+    want = np.array([1.0, 0.0, 0.0])
+    q = J.T @ np.linalg.solve(J @ J.T + 1e-9 * np.eye(3), want)
+    if np.linalg.norm(J @ q - want) > 1e-3:
+        return 0.0, 0.0
+    fwd = back = np.inf
+    for k in range(5):
+        if abs(q[k]) < 1e-9:
+            continue
+        up = (limits[k, 1] - angles[k]) / q[k]
+        dn = (limits[k, 0] - angles[k]) / q[k]
+        fwd = min(fwd, max(up, dn))
+        back = min(back, -min(up, dn))
+    return max(0.0, fwd), max(0.0, back)
+
+
 def solve(attach, lengths, target, seed, mount, limits):
     """Place the ankle, then lay the tarsus flat.
 
@@ -231,9 +290,9 @@ def solve_leg(attach_x, scale, target, mount, branch):
     # joints jammed against their limits means the starting posture was wrong,
     # not the target.
     best, best_score = None, float("inf")
-    for thc in (-0.5, 0.0, 0.5):
-        for ctr in (-1.2, -0.6, 0.6, 1.2):
-            for knee in (-2.2, -1.2, 1.2, 2.2):
+    for thc in (-1.0, -0.5, 0.0, 0.5, 1.0):
+        for ctr in (-2.2, -1.6, -1.2, -0.6, -0.2, 0.2, 0.6, 1.2, 1.6, 2.2):
+            for knee in (-2.6, -2.2, -1.2, -0.4, 0.4, 1.2, 2.2, 2.6, 3.0):
                 seed = np.clip(np.array([thc, ctr, 0.0, knee, 0.4]),
                                limits[:, 0], limits[:, 1])
                 angles = solve(attach, lengths, np.array(target, float), seed,
@@ -253,10 +312,28 @@ def solve_leg(attach_x, scale, target, mount, branch):
                 # either, so the femur and tibia simply ran underground and the
                 # leg looked broken in half on screen.
                 below = 0.0
-                for q in joint_positions(angles, attach, lengths, mount):
-                    below += max(0.0, GROUND_CLEARANCE - q[2])
+                for q, r in zip(joint_positions(angles, attach, lengths, mount),
+                                CLEAR_RADII):
+                    below += max(0.0, r + 0.005 - q[2])
                 # Penalise solutions pressed against a joint limit.
-                score = err + max(0.0, 0.05 - margin) * 2.0 + below * 20.0
+                #
+                # The floor used to be 0.05 rad, which is not room to move in,
+                # only room to exist in. The front leg came out at 0.057 and
+                # so paid nothing, while being jammed hard enough that it
+                # could not take a step at all.
+                # Require a stride in both directions, not just a stance.
+                fwd, back = stride_travel(angles, attach, lengths, mount,
+                                          limits)
+                short = (max(0.0, WANT_STRIDE - fwd) +
+                         max(0.0, WANT_STRIDE - back))
+                # Clearance is not tradeable. Weighted at 20 against a
+                # stride term worth up to 3 it was simply outbid, and the
+                # solver bought a longer stride with a hind femur 61 um under
+                # the floor -- which the physics then stood the animal on, so
+                # the hind legs carried 95% of it on their knees while the
+                # tarsi hung 90 um in the air.
+                score = (err + max(0.0, 0.30 - margin) * 3.0 + short * 5.0
+                         + (1000.0 if below > 1e-6 else 0.0) + below * 20.0)
                 if score < best_score:
                     best, best_score = angles, score
     return best, best_score, attach, lengths
@@ -309,9 +386,16 @@ def main() -> None:
         print(f"{name:<7} ankle = ({ankle[0]:+.3f}, {ankle[1]:+.3f}, "
               f"{ankle[2]:+.3f})  tarsus tip = ({foot[0]:+.3f}, {foot[1]:+.3f}, "
               f"{foot[2]:+.3f})")
+        fwd, back = stride_travel(angles, attach, lengths, mount, LIMITS)
         print(f"        error {err*1000:6.1f} um   tarsus rise "
               f"{(foot[2] - ankle[2])*1000:+6.1f} um   "
               f"limit margin {margin:.3f} rad")
+        print(f"        stride available: {fwd:.3f} mm forward, "
+              f"{back:.3f} mm backward")
+        lowest = min(
+            (q[2] - r) for q, r in
+            zip(joint_positions(angles, attach, lengths, mount), CLEAR_RADII))
+        print(f"        upper leg clears the floor by {lowest*1000:+6.1f} um")
 
     print("\nrest angles, radians:")
     print(f"  {'leg':<8}" + "".join(f"{j:>9}" for j in JOINT_NAMES))

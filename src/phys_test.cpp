@@ -19,6 +19,7 @@
 #include "body/Anatomy.h"
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
+#include "body/GaitPlan.h"
 
 using namespace fly;
 
@@ -365,6 +366,40 @@ struct GaitParams {
     // levering against it.
     float levelGain = 0.9f;
 
+    // Plan the gait as a foot path rather than as a set of joint
+    // sinusoids. The joint version needs a per-leg correction for the
+    // lift ThC introduces, and even corrected it leaves the front legs
+    // stepping the opposite way to the other four. Planning in foot
+    // space makes both of those the inverse kinematics' problem.
+    bool planned = true;
+    // Fore-aft foot travel either side of rest, mm. 0.24 reproduces the
+    // 0.475 mm stride the joint-space gait reached.
+    float strideMm = 0.24f;
+    float liftMm = 0.09f;
+    float duty = 0.55f;
+
+    // Load sharing between the stance legs.
+    //
+    // Six rigid legs holding up a rigid body is statically
+    // indeterminate: nothing in the geometry decides how the weight
+    // divides, so whichever feet are commanded lowest take all of it.
+    // With the feet planned to a fixed height that is exactly what
+    // happened -- the hind pair carried 95% of the animal and the front
+    // legs touched the floor while bearing one per cent each. The
+    // joint-space gait hid this by bouncing, which spread the load by
+    // accident.
+    //
+    // A fly does not leave it to chance. Campaniform sensilla report leg
+    // load continuously and the nervous system uses them to distribute
+    // weight. This is that, as a controller: a stance leg carrying more
+    // than its share lifts its foot slightly, one carrying less drops
+    // it. Millimetres per second of trim per unit of relative load
+    // error.
+    float shareGain = 0.4f;
+    // How far the trim may travel, millimetres. Enough to even out the
+    // difference between feet, far less than a step.
+    float shareClamp = 0.04f;
+
     // Drive the joints as forces through the muscle model, rather than as
     // position targets held by the posture servo.
     //
@@ -644,6 +679,16 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
 
     const HeightComp hc = solveHeightComp();
 
+    GaitPlan plan;
+    {
+        GaitSpec spec;
+        spec.periodMs = gp.periodMs;
+        spec.strideMm = gp.strideMm;
+        spec.liftMm = gp.liftMm;
+        spec.duty = gp.duty;
+        plan.build(spec);
+    }
+
     // Tripod A = front_L, middle_R, hind_L; tripod B is the other three.
     const bool tripodA[kLegCount] = {true, false, false, true, true, false};
 
@@ -659,6 +704,8 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     }
 
     const int n = static_cast<int>(gp.seconds / kDt);
+    // Per-leg vertical trim, millimetres, carried between frames.
+    float zTrim[kLegCount] = {};
     float worstPitch = 0.0f;
     float contactSum = 0.0f;
     // Fore-aft excursion of one foot relative to the body. This is the
@@ -696,6 +743,32 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     for (int i = 0; i < n; ++i) {
         const float t = i * kDt * 1000.0f;
         const float phase = 6.2831853f * t / periodMs;
+        if (gp.planned && gp.shareGain > 0.0f) {
+            float load[kLegCount] = {};
+            float total = 0.0f;
+            int stanceCount = 0;
+            bool inStance[kLegCount] = {};
+            for (int l = 0; l < kLegCount; ++l) {
+                const float pl = tripodA[l] ? phase : phase + 3.14159265f;
+                float u = pl / 6.2831853f;
+                u -= std::floor(u);
+                inStance[l] = u < gp.duty;
+                load[l] = phys.footLoad(l);
+                if (inStance[l]) {
+                    total += load[l];
+                    ++stanceCount;
+                }
+            }
+            if (stanceCount > 0 && total > 1e-9f) {
+                const float want = total / static_cast<float>(stanceCount);
+                for (int l = 0; l < kLegCount; ++l) {
+                    if (!inStance[l]) continue;
+                    zTrim[l] += gp.shareGain * ((load[l] - want) / want) * kDt;
+                    zTrim[l] = std::clamp(zTrim[l], -gp.shareClamp,
+                                          gp.shareClamp);
+                }
+            }
+        }
         for (int l = 0; l < kLegCount; ++l) {
             const float p = tripodA[l] ? phase : phase + 3.14159265f;
             const float s = std::sin(p);
@@ -732,6 +805,16 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // grow without bound and flung the fly at 130 mm/s.
             const float tonicCTr = gp.forceMode ? -gp.tonic : 0.0f;
             const float tonicFTi = gp.forceMode ? gp.tonic : 0.0f;
+            if (gp.planned) {
+                // The whole leg comes from the plan.
+                float q[kJointCount];
+                plan.targets(l, p / 6.2831853f, q);
+                for (int j = 0; j < kJointCount; ++j) out[j] = q[j];
+                const float* up = plan.basis(l, 2);
+                for (int j = 0; j < kJointCount; ++j) out[j] += up[j] * zTrim[l];
+                out[static_cast<int>(Joint::FTi)] += tonicFTi;
+                out[static_cast<int>(Joint::CTr)] += tonicCTr;
+            } else {
             out[static_cast<int>(Joint::FTi)] = tonicFTi;
             const float thcOff = -amplitude * s - place;
             out[static_cast<int>(Joint::ThC)] = thcOff;
@@ -759,6 +842,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // every step. A real fly rolls the foot, and the tarsus has to
             // come up with the leg.
             out[static_cast<int>(Joint::TiTa)] = (c > 0.0f) ? toeLift * c : 0.0f;
+            }
 
             // Postural feedback, and it is a hand-built controller: no
             // neuron is involved and it must not be reported as the nervous
@@ -1086,6 +1170,12 @@ int main(int argc, char** argv) {
                 else if (!std::strcmp(a, "--prate")) gp.postureRate = std::stof(v);
                 else if (!std::strcmp(a, "--step")) gp.stepGain = std::stof(v);
                 else if (!std::strcmp(a, "--level")) gp.levelGain = std::stof(v);
+                else if (!std::strcmp(a, "--stride")) gp.strideMm = std::stof(v);
+                else if (!std::strcmp(a, "--liftmm")) gp.liftMm = std::stof(v);
+                else if (!std::strcmp(a, "--duty")) gp.duty = std::stof(v);
+                else if (!std::strcmp(a, "--share")) gp.shareGain = std::stof(v);
+                else if (!std::strcmp(a, "--share-clamp")) gp.shareClamp = std::stof(v);
+                else if (!std::strcmp(a, "--joint-gait")) gp.planned = false;
                 else if (!std::strcmp(a, "--trials")) gp.trials = std::atoi(v);
                 else if (!std::strcmp(a, "--jitter")) gp.jitter = std::stof(v);
                 else if (!std::strcmp(a, "--force")) gp.forceMode = true;

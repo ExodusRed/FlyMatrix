@@ -26,6 +26,7 @@ add_library(flycore STATIC
   src/core/NeuronNames.cpp
   src/body/FlyBody.cpp
   src/body/FlyPhysics.cpp
+  src/body/GaitPlan.cpp
   src/body/MotorPools.cpp
   src/body/SensoryOrgans.cpp
   src/engine/Physics.cpp
