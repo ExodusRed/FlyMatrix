@@ -30,6 +30,7 @@ seconds**, so a torque of 1 is 1e-15 N·m and the whole animal weighs about
 | [04-connectome.md](04-connectome.md) | The nervous-system side: what the connectome has and has not produced. |
 | [05-method.md](05-method.md) | How to test this thing, and the traps that have cost whole nights. |
 | [06-open-questions.md](06-open-questions.md) | What is still wrong, ranked, and everything already ruled out. |
+| [07-motor-architecture.md](07-motor-architecture.md) | **Proposal, not built.** A motor layer shaped like the animal's: sensory-triggered walking, resonant flight, behaviour as action selection. |
 
 `docs/walking.md` is the short current-state summary. `docs/findings.md` is the
 chronological narrative with the full working.
