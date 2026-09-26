@@ -1772,3 +1772,125 @@ A hand-built controller cannot substitute, either: findings 14 and 19 show
 every added correction term feeding the pump. The restoring force has to come
 from something that measures the body's state, and in this animal that is the
 campaniform sensilla and the chordotonal organs.
+
+
+---
+
+## 21. Looking at it. The legs were underground the whole time.
+
+Red pointed out that the limbs were visibly glitching and that I had never once
+watched the model move. Both true. Rendering a walking sequence took ten
+minutes and found what weeks of statistics had not.
+
+### What the picture showed
+
+Leg segments lying detached on the floor, separated from the legs they belonged
+to. The per-segment report added for this, `flyphys --foot`, says why:
+
+```
+segment    prox z    dist z   gap um
+femur      0.2104   -0.0852      0.0
+tibia     -0.0852   -0.0189      0.1
+ta4       -0.0014    0.0120     59.5
+```
+
+The femur ended **85 um below the ground** and the tibia ran underground for
+its whole length. Only the tarsus had contact probes; the coxa, trochanter,
+femur and tibia had no collision at all and passed straight through the floor.
+On screen the upper leg vanished into the floor while the tarsus lay on top of
+it, so the leg looked snapped in half.
+
+The 0.0616 mm anchor error, noted twice and dismissed as small, renders at
+370 px/mm as a 23-pixel break. It was never small. It was the glitch.
+
+### Three faults, all upstream of anything previously measured
+
+**No collision on the upper leg.** Every leg segment now has contact points, at
+both ends rather than only the distal tip. A single probe let the proximal end
+sink: the last tarsomere sat 26 um under the floor while its own tip rested on
+top of it.
+
+**The rest-pose solver never looked at the joints in between.** It constrained
+the ankle and the foot target and said nothing about the knee, so it happily
+produced stances with the femur underground. It now penalises any joint below a
+clearance height.
+
+**The joint limits existed twice and had drifted.** Four of five disagreed:
+
+```
+joint   solve_rest_pose.py    FlyBody.cpp
+ThC     -0.9  0.9             -1.6  1.6
+CTr     -1.6  1.6             -2.8  2.0
+FTi     -2.6  2.6             -1.0  3.3
+TiTa    -3.0  3.0             -3.3  1.5
+```
+
+The solver was producing poses the physics rejected on the first step: every
+leg's knee started outside its limit, the limit constraint shoved all six, and
+the fly stood 0.37 mm too high on four feet. They live in `Anatomy.h` now and
+the solver parses them out of the header, so they cannot drift again. This is
+the third time in this project that two copies of the same data have quietly
+disagreed, after the anatomy and the abdomen offset.
+
+### What it fixed
+
+```
+tarsomere gaps        59.5 um  ->  <= 1.7 um
+worst anchor error     0.0617  ->  0.0209 mm
+femur below floor      -85 um  ->  none
+upright                5 of 9  ->  9 of 9
+speed spread      -1.27..5.51  ->  6.63..7.46 mm/s
+pitch spread       14.5..81.8  ->  13.4..14.0 deg
+walking speed            1.63  ->  6.86 mm/s
+```
+
+Across a +/-16 um perturbation the gait now varies by 0.8 mm/s and 0.6 degrees.
+It used to vary between walking backwards and falling over.
+
+### This reframes the chaos
+
+Findings 12, 14, 16 and 19 all rest on the observation that this model is
+chaotically sensitive -- that changes altering no physics moved the headline
+number by factors of two, that gain sweeps could not converge, that a single
+trial meant nothing.
+
+Most of that was this bug. Legs passing through the floor and a tarsal chain
+coming apart produce discontinuous contact events, and discontinuities amplify
+any perturbation into a different trajectory. With the geometry sound the same
+gait is repeatable to three significant figures.
+
+The retraction in finding 16 still stands: those numbers *were* single
+trajectories and should not have been quoted. But the instability they measured
+was a defect, not a property of the model.
+
+Finding 19's diagnosis needs the same qualification. The fly really was
+launching itself, and a stiff position servo really does pump energy. But the
+reason 60 ms stepping was unusable was not only the pump -- it was the legs
+catching on a floor they were half inside. With that fixed, 60 ms is not merely
+usable but four times quicker than the 160 ms that finding settled on.
+
+### What is still wrong
+
+Duty factor is 0.77 where a real fly walking is near 0.5: the legs are on the
+ground three-quarters of the time, so this is a quick shuffle rather than a
+proper tripod. Three separate levers were measured against it and all trade it
+for falling over:
+
+```
+                       duty   upright
+lift 0.3, toe 0.2      0.78     9/9
+lift 1.0, toe 0.5      0.71     8/9
+lift 2.0, toe 1.5      0.59     6/9
+tarsus compliance 0.4  0.63     0/5
+```
+
+Reliability was chosen over realism, since a fly that falls over a third of the
+time is not walking. The gap is real and unexplained.
+
+### The method lesson
+
+A passing metric is not evidence the behaviour is right. Every number in the
+harness said the fly was standing and walking correctly while it was visibly in
+pieces, because no measurement asked where the leg segments actually were. Two
+new tools exist now and should have existed long ago: `flyphys --foot` for a
+per-segment report, and `flybody --film` for capturing a sequence to watch.
