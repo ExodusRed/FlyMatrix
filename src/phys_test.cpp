@@ -96,6 +96,8 @@ float g_mintar = -1.0f;
 // graded -- below a threshold the posture servo holds, above it the joint
 // slams to its stop.
 float g_probeDrive = 1.5f;
+float g_hillVmax = -1.0f;
+int g_hill = -1;
 int g_inter = -1;
 float g_ms = 300.0f;
 bool g_standOnly = false;
@@ -294,6 +296,7 @@ int traceOne(const std::string& jointName_, float drive) {
 struct GaitResult {
     float speed = 0.0f, stride = 0.0f, duty = 0.0f, pitch = 0.0f;
     float height = 0.0f;
+    float peakRate = 0.0f;
     bool upright = false;
 };
 
@@ -326,6 +329,32 @@ struct GaitParams {
     // whole of it is one term: shift the swing target by k times forward
     // velocity.
     float stepGain = 0.0f;
+
+    // Drive the joints as forces through the muscle model, rather than as
+    // position targets held by the posture servo.
+    //
+    // This is the difference between an actuator and a servo, and finding 19
+    // says it is the whole ceiling. A position servo can only add energy: its
+    // target jumps, it shoves, and at gait frequencies that pumps the body
+    // into the air. A muscle produces force, and the Hill force-velocity
+    // relation makes that force fall as the muscle shortens quickly -- which
+    // dissipates. The Hill model has been in FlyPhysics for three sessions
+    // and the walking path has been bypassing it.
+    bool forceMode = false;
+
+    // Baseline muscle activation, added to every joint's drive in force mode.
+    //
+    // This is what findings 3 said was missing and it has been missing ever
+    // since: "a controller needs a baseline output to modulate, and ours is
+    // zero". A real fly holds its posture with the tonic firing of its slow
+    // motor neurons. This model holds it with postureTorque, an engineering
+    // servo standing in for those neurons, and as long as that servo is
+    // stiffer than the muscles it is the servo doing the walking.
+    //
+    // With a tonic term the muscles can carry the body themselves and
+    // postureTorque can come down, which is the only way the force path
+    // becomes more than a weaker servo.
+    float tonic = 0.0f;
 
     int trials = 5;
     // Starting-height offset for a single verbose trial, so a particular
@@ -362,6 +391,7 @@ int gaitTest(const GaitParams& gp) {
 
     std::vector<float> speeds, pitches;
     int upright = 0;
+    float peakRate = 0.0f;
     for (int k = 0; k < trials; ++k) {
         // Spread the perturbation either side of the nominal start.
         const float jit = 0.004f * (static_cast<float>(k) -
@@ -370,6 +400,7 @@ int gaitTest(const GaitParams& gp) {
         speeds.push_back(r.speed);
         pitches.push_back(r.pitch);
         if (r.upright) ++upright;
+        peakRate = std::max(peakRate, r.peakRate);
         std::printf("%+8.3f %10.2f %10.3f %8.2f %8.1f\n",
                     jit, r.speed, r.stride, r.duty, r.pitch);
     }
@@ -406,7 +437,10 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
-    phys.params.useManualTarget = true;
+    if (g_hill >= 0) phys.params.hillMuscle = (g_hill != 0);
+    if (g_hillVmax > 0.0f) phys.params.hillShorteningRate = g_hillVmax;
+    phys.params.useManualTarget = !gp.forceMode;
+    phys.params.useManualDrive = gp.forceMode;
     // Displace the starting height very slightly. Enough that the trajectory
     // differs, far too little to change what the gait is being asked to do.
     skeleton.root.position.z += jitter;
@@ -466,8 +500,21 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // none at all above that.
             const float vx = phys.thorax().velocity.x;
             const float place = (c > 0.0f) ? stepGain * vx : 0.0f;
-            phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
-                -amplitude * s - place;
+            float* out = gp.forceMode ? phys.params.manualDrive[l]
+                                      : phys.params.manualTarget[l];
+            // Tonic baseline on the joints that carry weight, in the
+            // direction that extends the leg against the ground. Signs from
+            // flyphys test 2 at the usable probe drive: CTr -1.5 lifts, and
+            // FTi -1.5 sinks, so FTi's extending direction is positive.
+            //
+            // Every target is written fresh each frame. manualDrive persists
+            // between frames -- it lives in params, not in a per-step buffer
+            // -- so accumulating into it instead of assigning made the drive
+            // grow without bound and flung the fly at 130 mm/s.
+            const float tonicCTr = gp.forceMode ? -gp.tonic : 0.0f;
+            const float tonicFTi = gp.forceMode ? gp.tonic : 0.0f;
+            out[static_cast<int>(Joint::FTi)] = tonicFTi;
+            out[static_cast<int>(Joint::ThC)] = -amplitude * s - place;
             // Lift only during swing, which is the half where the leg is
             // protracting. A leg that lifts during stance just drops the body.
             //
@@ -476,8 +523,8 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // flyphys test 2 reports CTr -15 as LIFTS, and taking that to mean
             // "lift the foot" drove every swing leg into the floor, so all six
             // feet stayed planted and the fly shuffled backwards.
-            phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
-                (c > 0.0f) ? lift * c : 0.0f;
+            out[static_cast<int>(Joint::CTr)] =
+                tonicCTr + ((c > 0.0f) ? lift * c : 0.0f);
             // Curl the tarsus during swing.
             //
             // A point foot can be planted and lifted straight up. A tarsus
@@ -485,8 +532,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // alone leaves the far end dragging, which is the toe catching on
             // every step. A real fly rolls the foot, and the tarsus has to
             // come up with the leg.
-            phys.params.manualTarget[l][static_cast<int>(Joint::TiTa)] =
-                (c > 0.0f) ? toeLift * c : 0.0f;
+            out[static_cast<int>(Joint::TiTa)] = (c > 0.0f) ? toeLift * c : 0.0f;
 
             // Postural feedback, and it is a hand-built controller: no
             // neuron is involved and it must not be reported as the nervous
@@ -530,7 +576,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
                 // correcting a nose-up pitch means making the front legs'
                 // CTr *more positive*. Getting this backwards drove the fly
                 // backwards at -48 mm/s with a duty factor of 0.13.
-                phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] += corr;
+                out[static_cast<int>(Joint::CTr)] += corr;
             }
         }
         phys.step(kDt);
@@ -607,6 +653,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     out.pitch = worstPitch;
     out.height = held;
     out.upright = moved && upright;
+    out.peakRate = phys.peakJointRate();
     return out;
 }
 
@@ -671,9 +718,11 @@ int main(int argc, char** argv) {
             // already one too many to remember, and the controller search
             // adds more.
             GaitParams gp;
-            for (int k = 1; k < argc - 1; ++k) {
+            for (int k = 1; k < argc; ++k) {
                 const char* a = argv[k];
-                const char* v = argv[k + 1];
+                // Valueless flags must still be reachable in last position,
+                // so this guards the value rather than the loop bound.
+                const char* v = (k + 1 < argc) ? argv[k + 1] : "0";
                 if (!std::strcmp(a, "--period")) gp.periodMs = std::stof(v);
                 else if (!std::strcmp(a, "--swing")) gp.swing = std::stof(v);
                 else if (!std::strcmp(a, "--lift")) gp.lift = std::stof(v);
@@ -683,6 +732,10 @@ int main(int argc, char** argv) {
                 else if (!std::strcmp(a, "--step")) gp.stepGain = std::stof(v);
                 else if (!std::strcmp(a, "--trials")) gp.trials = std::atoi(v);
                 else if (!std::strcmp(a, "--jitter")) gp.jitter = std::stof(v);
+                else if (!std::strcmp(a, "--force")) gp.forceMode = true;
+                else if (!std::strcmp(a, "--no-hill")) g_hill = 0;
+                else if (!std::strcmp(a, "--vmax")) g_hillVmax = std::stof(v);
+                else if (!std::strcmp(a, "--tonic")) gp.tonic = std::stof(v);
             }
             return gaitTest(gp);
         }

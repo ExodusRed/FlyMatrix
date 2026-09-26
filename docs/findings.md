@@ -1678,3 +1678,97 @@ is currently bypassed on the walking path, which uses `useManualTarget` and the
 posture servo directly. Giving the gait a force-based, force-velocity-damped
 actuator instead of a position target is the obvious next thing to try, and it
 is a change to the muscle model rather than to the controller.
+
+
+---
+
+## 20. Force-driven muscles instead of a position servo: equivalent, and the reason why matters
+
+Finding 19 concluded that the ceiling on walking was the actuator -- a stiff
+position servo can only add energy, and at gait frequencies that pumps the
+body into the air, whereas a muscle's force-velocity relation dissipates. The
+Hill model had been sitting in `FlyPhysics` for three sessions with the
+walking path bypassing it.
+
+So the walking path was given a force mode: the gait writes muscle drives
+instead of joint angles, through `applyDrive`, with the Hill force-length and
+force-velocity factors active.
+
+### The damping is real and it is not enough
+
+Within force mode, turning Hill off costs reliability, so the damping does
+what it is supposed to:
+
+```
+                      median speed   upright
+Hill on  (vmax 12)      2.64 mm/s      2/5
+Hill off                1.16           1/5
+```
+
+Stronger damping helps further, and a sweep of the shortening rate lands on
+0.6 rad/s. But measured properly against the position servo, at nine trials
+each:
+
+```
+                 median speed   median pitch   upright
+force + Hill       1.99 mm/s      22.9 deg       5/9
+position servo     1.67           17.3           5/9
+```
+
+**Identical reliability.** Force mode is marginally quicker and marginally
+less steady. There is no evidence to prefer either, so the default does not
+move and force mode ships behind `--force`, available and documented.
+
+### Why the actuator change did not break through
+
+Because the actuator was not the whole story. `applyDrive` gives a joint a
+feed-forward muscle torque *and* leaves the posture servo holding the rest
+angle underneath it, at `postureTorque` 6e6 against a muscle that peaks
+around 2.7e6. The servo is stiffer than the muscle, so even in "force mode"
+the servo is doing most of the walking.
+
+The obvious next move was to weaken the servo and let the muscles carry the
+body, which needs a tonic baseline -- exactly what finding 3 identified as
+missing three sessions ago: *a controller needs a baseline output to modulate,
+and ours is zero.* A `--tonic` term was added for that.
+
+It does not work:
+
+```
+posture   tonic   median speed   upright
+6e6       0        1.99 mm/s      4/5
+6e6       1.5     -0.42           1/5
+6e6       3       -4.72           1/5
+2e6       0       -0.62           0/5
+2e6       1.5     -0.60           0/5
+2e6       3        0.04           0/5
+```
+
+Weakening the servo collapses the fly whatever the tonic drive, and adding
+tonic drive at full servo stiffness makes things worse rather than better.
+
+The reason is straightforward once stated. A constant extensor drive pushes;
+it does not *restore*. Posture needs a force that grows with deviation, and
+that is precisely what the servo supplies and a tonic activation does not. In
+a real fly the restoring term comes from proprioceptive feedback modulating
+those tonic motor neurons -- the loop this project cannot yet run stably
+(finding 10).
+
+### What this actually says
+
+The ceiling was correctly identified as an implementation artefact rather than
+physics, and it was still wrongly located. It is not the position servo as
+such. It is that **posture is held by an engineering servo because there is no
+working proprioceptive loop to hold it**, and any change to the actuator runs
+into that fact.
+
+That unifies three findings that had looked separate. Finding 3: the network
+produces no tonic drive, so `postureTorque` stands in for slow motor neurons.
+Finding 10: the sensory loop is unstable and switched off. Finding 19: the
+servo pumps energy and caps walking speed. They are one problem seen from
+three sides, and the sensorimotor loop is the thing at the bottom of it.
+
+A hand-built controller cannot substitute, either: findings 14 and 19 show
+every added correction term feeding the pump. The restoring force has to come
+from something that measures the body's state, and in this animal that is the
+campaniform sensilla and the chordotonal organs.
