@@ -216,7 +216,7 @@ void FlyPhysics::build(const FlyBody& skeleton) {
             hj.axisA = ra.transposed() * worldAxis;
             hj.axisB = rb.transposed() * worldAxis;
             hj.maxTorque = params.postureTorque * params.tarsusStiffness;
-            hj.servoRate = params.servoRate;
+            hj.servoRate = params.tarsusServoRate;
             hj.damping = params.jointDamping;
             hj.minAngle = -params.tarsusRangeRad;
             hj.maxAngle = params.tarsusRangeRad;
@@ -488,6 +488,23 @@ V3 FlyPhysics::centreOfMass() const {
         m += bm;
     }
     return (m > 0.0f) ? sum * (1.0f / m) : V3{0, 0, 0};
+}
+
+bool FlyPhysics::bodyPart(std::uint32_t body, int& leg, int& link) const {
+    for (std::size_t i = 0; i < segments_.size(); ++i) {
+        if (segments_[i].body != body) continue;
+        if (i < static_cast<std::size_t>(kLegCount * kJointCount)) {
+            leg = static_cast<int>(i) / kJointCount;
+            link = static_cast<int>(i) % kJointCount;
+        } else {
+            const std::size_t t = i - kLegCount * kJointCount;
+            leg = static_cast<int>(t) / (anat::kTarsomereCount - 1);
+            link = kJointCount +
+                   static_cast<int>(t) % (anat::kTarsomereCount - 1);
+        }
+        return true;
+    }
+    return false;
 }
 
 float FlyPhysics::totalMass() const {

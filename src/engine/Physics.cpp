@@ -159,10 +159,19 @@ void PhysicsWorld::clampVelocities() {
         const float lv = length(b.velocity);
         if (lv > params.maxLinearVelocity) {
             b.velocity = b.velocity * (params.maxLinearVelocity / lv);
+            ++clampHits;
+            ++clampLinear;
         }
         const float av = length(b.angularVelocity);
+        if (av > peakAngularSeen) {
+            peakAngularSeen = av;
+            peakAngularBody = static_cast<std::uint32_t>(&b - bodies.data());
+        }
         if (av > params.maxAngularVelocity) {
             b.angularVelocity = b.angularVelocity * (params.maxAngularVelocity / av);
+            ++clampHits;
+            ++clampAngular;
+            peakAngular = std::max(peakAngular, av);
         }
     }
 }
@@ -203,6 +212,13 @@ void PhysicsWorld::beginJoints() {
 
 // One Gauss-Seidel sweep over every joint.
 void PhysicsWorld::jointPass(float dt) {
+    // Record the size of an angular impulse in the units that matter: how
+    // much spin it gives the lighter of the two bodies.
+    auto note = [&](Blame which, const M3& ia, const M3& ib, const V3& imp) {
+        const float da = length(ia * imp);
+        const float db = length(ib * imp);
+        blame[which] = std::max(blame[which], std::max(da, db));
+    };
     const float invDt = dt > 0.0f ? 1.0f / dt : 0.0f;
     {
         // Joints are swept in the order they were built, which is root to tip
@@ -235,7 +251,15 @@ void PhysicsWorld::jointPass(float dt) {
                     const float relSpin =
                         dot(B.angularVelocity - A.angularVelocity, axis);
 
-                    const float want = j.servoRate * (target - angle) * invDt;
+                    // Bounded: a servo that asks for a spin the rest of the
+                    // machinery cannot deliver gets it taken away again by
+                    // the speed ceiling, and the joint pays for it.
+                    const float rate = params.servoTau > 0.0f
+                                           ? 1.0f / params.servoTau
+                                           : j.servoRate * invDt;
+                    const float want =
+                        std::clamp((target - angle) * rate,
+                                   -params.maxServoSpin, params.maxServoSpin);
                     float lambda = (want - relSpin * (1.0f + j.damping)) / eff;
 
                     const float maxImp = j.maxTorque * dt;
@@ -246,6 +270,7 @@ void PhysicsWorld::jointPass(float dt) {
                     const V3 imp = axis * lambda;
                     A.angularVelocity += ia * (-imp);
                     B.angularVelocity += ib * imp;
+                    note(kServo, ia, ib, imp);
                 }
             }
 
@@ -269,6 +294,7 @@ void PhysicsWorld::jointPass(float dt) {
                     const V3 imp = axis * lambda;
                     A.angularVelocity += ia * (-imp);
                     B.angularVelocity += ib * imp;
+                    note(kMuscle, ia, ib, imp);
                 }
             }
 
@@ -330,6 +356,7 @@ void PhysicsWorld::jointPass(float dt) {
                             const V3 imp = axis * lambda;
                             A.angularVelocity += ia * (-imp);
                             B.angularVelocity += ib * imp;
+                            note(kLimit, ia, ib, imp);
                         }
                     }
                 }
@@ -359,11 +386,27 @@ void PhysicsWorld::jointPass(float dt) {
                 for (const V3& t : basis) {
                     const float eff = dot(t, ia * t) + dot(t, ib * t);
                     if (eff < 1e-12f) continue;
-                    const float bias = params.baumgarte * invDt * dot(errVec, t);
+                    // Clamped, as the joint limit above is.
+                    //
+                    // baumgarte * invDt is 5600 at 8 kHz: a quarter radian of
+                    // misalignment asks for 1400 rad/s, applied straight to
+                    // real angular velocity with no bound. The body speed
+                    // ceiling then clips it, and clipping one body of a pair
+                    // breaks the constraint that produced the demand, so the
+                    // error grows and it asks for more. That loop is what
+                    // tore the legs off during walking -- the anchor error
+                    // went 0.047 mm to 1.42 mm in one step -- and it is why
+                    // shortening the substep made it worse rather than
+                    // better. Only the joint limit had this clamp.
+                    const float bias =
+                        std::clamp(params.baumgarte * invDt * dot(errVec, t),
+                                   -params.maxCorrectionVelocity,
+                                   params.maxCorrectionVelocity);
                     const float lambda = -(dot(relOmega, t) + bias) / eff;
                     const V3 imp = t * lambda;
                     A.angularVelocity += ia * (-imp);
                     B.angularVelocity += ib * imp;
+                    note(kWeld, ia, ib, imp);
                 }
             }
 
@@ -384,11 +427,15 @@ void PhysicsWorld::jointPass(float dt) {
                 for (const V3& t : {t1, t2}) {
                     const float eff = dot(t, ia * t) + dot(t, ib * t);
                     if (eff < 1e-12f) continue;
-                    const float bias = params.baumgarte * invDt * dot(err, t);
+                    const float bias =
+                        std::clamp(params.baumgarte * invDt * dot(err, t),
+                                   -params.maxCorrectionVelocity,
+                                   params.maxCorrectionVelocity);
                     const float lambda = -(dot(relOmega, t) + bias) / eff;
                     const V3 imp = t * lambda;
                     A.angularVelocity += ia * (-imp);
                     B.angularVelocity += ib * imp;
+                    note(kAxis, ia, ib, imp);
                 }
             }
 
@@ -419,6 +466,7 @@ void PhysicsWorld::jointPass(float dt) {
                 const V3 impulse = kInv * (-relVel);
                 A.applyImpulse(-impulse, rA);
                 B.applyImpulse(impulse, rB);
+                note(kAnchor, ia, ib, cross(rB, impulse));
                 j.accumulated += impulse;
 
                 // Position correction, into the pseudo-velocities. These move
@@ -518,7 +566,9 @@ void PhysicsWorld::contactPass(float dt) {
             const float push = std::max(0.0f, c.penetration - params.slop);
             if (push > 0.0f) {
                 const float pv = dot(b.pseudoPointVelocity(r), c.normal);
-                const float bias = params.baumgarte * invDt * push;
+                const float bias =
+                    std::min(params.baumgarte * invDt * push,
+                             params.maxCorrectionVelocity);
                 const float pl = std::max(0.0f, (bias - pv) / effN);
                 b.applyPseudoImpulse(c.normal * pl, r);
             }

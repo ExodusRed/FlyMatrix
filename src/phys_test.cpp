@@ -102,6 +102,13 @@ float g_probeDrive = 1.5f;
 // then was not; this prints every frame across the transition, so the event
 // can be read rather than inferred from ten samples in twelve seconds.
 float g_from = -1.0f, g_to = -1.0f;
+// Body angular speed ceiling, rad/s. The clamp that enforces it runs after
+// the solvers and rescales one body without its neighbours, so every time
+// it fires it breaks a joint the solver had just satisfied.
+float g_maxSpin = -1.0f;
+float g_servoSpin = -1.0f;
+float g_tarsusRate = -1.0f;
+float g_tau = -1.0f;  // servo time constant, milliseconds
 float g_hillVmax = -1.0f;
 int g_hill = -1;
 int g_inter = -1;
@@ -116,6 +123,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_tarsusRate > 0.0f) phys.params.tarsusServoRate = g_tarsusRate;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
@@ -132,6 +140,9 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_corr > 0.0f) phys.world.params.maxCorrectionVelocity = g_corr;
     if (g_friction > 0.0f) phys.world.params.friction = g_friction;
     if (g_inter >= 0) phys.world.params.interleave = (g_inter != 0);
+    if (g_maxSpin > 0.0f) phys.world.params.maxAngularVelocity = g_maxSpin;
+    if (g_servoSpin > 0.0f) phys.world.params.maxServoSpin = g_servoSpin;
+    if (g_tau > 0.0f) phys.world.params.servoTau = g_tau * 0.001f;
 
     const int n = static_cast<int>(ms / 1000.0f / kDt);
     Result r{};
@@ -255,6 +266,7 @@ int traceOne(const std::string& jointName_, float drive) {
     if (g_servo > 0.0f) phys.params.servoRate = g_servo;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_tarsusRate > 0.0f) phys.params.tarsusServoRate = g_tarsusRate;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
@@ -307,6 +319,20 @@ struct GaitResult {
     float height = 0.0f;
     float peakRate = 0.0f;
     bool upright = false;
+    // Worst joint anchor separation seen during the trial, millimetres, and
+    // when it happened.
+    //
+    // This turned out to be the thing that actually ends a run. A twelve
+    // second walk looks steady -- height, pitch and contacts all normal --
+    // until one frame where the anchor error jumps from 0.047 mm to 1.42 mm
+    // and the leg comes apart. The body is thrown afterwards; the fall is the
+    // consequence, not the cause. Every previous explanation of the fall was
+    // describing the wreckage.
+    float worstAnchor = 0.0f;
+    float anchorAtMs = 0.0f;
+    // First time the linkage separated by more than a tenth of a millimetre,
+    // which is far past anything the gait produces when it is working.
+    float burstMs = -1.0f;
 };
 
 struct GaitParams {
@@ -399,6 +425,22 @@ struct GaitParams {
     // How far the trim may travel, millimetres. Enough to even out the
     // difference between feet, far less than a step.
     float shareClamp = 0.04f;
+
+    // Steering, by stride length.
+    //
+    // Nothing in this model has ever measured which way the fly is
+    // pointing. It turns out not to go straight: yaw reaches 6 degrees
+    // in the first half second and 8.7 by 1.5 s, and the body then
+    // crabs sideways at that angle. The planned foot paths run fore and
+    // aft in *body* coordinates, so once the body is yawed away from its
+    // direction of travel every stance foot is being dragged across the
+    // ground rather than along it.
+    //
+    // A fly steers by taking longer strides on the outside of the turn.
+    // This is that: shrink the stride on one side in proportion to the
+    // heading error and the yaw rate.
+    float yawGain = 0.0f;
+    float yawRateGain = 0.0f;
 
     // Drive the joints as forces through the muscle model, rather than as
     // position targets held by the posture servo.
@@ -613,11 +655,13 @@ int gaitTest(const GaitParams& gp) {
     std::printf("pgain %.2f, prate %.4f, step %.4f\n",
                 gp.postureGain, gp.postureRate, gp.stepGain);
     std::printf("%d trials from perturbed starts\n\n", trials);
-    std::printf("%8s %10s %10s %8s %8s\n",
-                "jitter", "speed", "stride", "duty", "pitch");
+    std::printf("%8s %10s %10s %8s %8s %9s %9s\n",
+                "jitter", "speed", "stride", "duty", "pitch", "anchor",
+                "burst ms");
 
     std::vector<float> speeds, pitches;
     int upright = 0;
+    int bursts = 0;
     float peakRate = 0.0f;
     for (int k = 0; k < trials; ++k) {
         // Spread the perturbation either side of the nominal start.
@@ -627,9 +671,11 @@ int gaitTest(const GaitParams& gp) {
         speeds.push_back(r.speed);
         pitches.push_back(r.pitch);
         if (r.upright) ++upright;
+        if (r.burstMs >= 0.0f) ++bursts;
         peakRate = std::max(peakRate, r.peakRate);
-        std::printf("%+8.3f %10.2f %10.3f %8.2f %8.1f\n",
-                    jit, r.speed, r.stride, r.duty, r.pitch);
+        std::printf("%+8.3f %10.2f %10.3f %8.2f %8.1f %9.4f %9.0f\n",
+                    jit, r.speed, r.stride, r.duty, r.pitch, r.worstAnchor,
+                    r.burstMs);
     }
     std::sort(speeds.begin(), speeds.end());
     std::sort(pitches.begin(), pitches.end());
@@ -640,6 +686,7 @@ int gaitTest(const GaitParams& gp) {
                 medS, speeds.front(), speeds.back(),
                 medP, pitches.front(), pitches.back());
     std::printf("upright in %d of %d trials\n", upright, trials);
+    std::printf("linkage burst in %d of %d trials\n", bursts, trials);
     // Report the fraction rather than a verdict that rounds a bare majority
     // up to "it walks". Five of nine is not the same claim as nine of nine.
     const bool ok = upright * 2 >= trials && std::fabs(medS) > 0.5f;
@@ -662,6 +709,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     if (g_stiffness > 0.0f) phys.params.postureTorque = g_stiffness;
     if (g_substep > 0.0f) phys.params.substepHz = g_substep;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_tarsusRate > 0.0f) phys.params.tarsusServoRate = g_tarsusRate;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
     if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
@@ -676,6 +724,9 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     if (g_iters > 0) phys.world.params.iterations = g_iters;
     if (g_friction > 0.0f) phys.world.params.friction = g_friction;
     if (g_inter >= 0) phys.world.params.interleave = (g_inter != 0);
+    if (g_maxSpin > 0.0f) phys.world.params.maxAngularVelocity = g_maxSpin;
+    if (g_servoSpin > 0.0f) phys.world.params.maxServoSpin = g_servoSpin;
+    if (g_tau > 0.0f) phys.world.params.servoTau = g_tau * 0.001f;
 
     const HeightComp hc = solveHeightComp();
 
@@ -707,6 +758,9 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     // Per-leg vertical trim, millimetres, carried between frames.
     float zTrim[kLegCount] = {};
     float worstPitch = 0.0f;
+    float worstAnchor = 0.0f;
+    float anchorAtMs = 0.0f;
+    float burstMs = -1.0f;
     float contactSum = 0.0f;
     // Fore-aft excursion of one foot relative to the body. This is the
     // geometry's answer to "how long can a stride be", independent of
@@ -730,6 +784,17 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     constexpr int kBuckets = 12;
     double copNum[kBuckets] = {}, copDen[kBuckets] = {};
     double pitchSum[kBuckets] = {};
+    // Yaw, roll and lateral drift.
+    //
+    // Every diagnostic so far has watched pitch and height, because
+    // pitch is how the fall ends. Nothing has ever measured whether the
+    // animal is still pointing the way it started. A tripod gait that
+    // turns slowly puts its feet down across its own direction of
+    // travel, and the load table right before a fall is wildly
+    // asymmetric left to right -- 0.74 of the weight on the left legs --
+    // which is what that would look like.
+    double yawSum[kBuckets] = {}, rollSum[kBuckets] = {};
+    double ySum[kBuckets] = {};
     // Hop amplitude and vertical speed. A position servo driven at gait
     // frequency adds energy every time its target jumps, and the signature
     // is a vertical oscillation that grows bucket on bucket until the body
@@ -812,6 +877,26 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
                 for (int j = 0; j < kJointCount; ++j) out[j] = q[j];
                 const float* up = plan.basis(l, 2);
                 for (int j = 0; j < kJointCount; ++j) out[j] += up[j] * zTrim[l];
+                if (gp.yawGain > 0.0f || gp.yawRateGain > 0.0f) {
+                    // Heading error, signed so positive means the nose has
+                    // swung left.
+                    const V3 fwdB = phys.thorax().orientation.rotate({1, 0, 0});
+                    const float yawErr = std::atan2(fwdB.y, fwdB.x);
+                    const float yawRate = phys.thorax().angularVelocity.z;
+                    const float corr = gp.yawGain * yawErr +
+                                       gp.yawRateGain * yawRate;
+                    // Left legs are the even indices. Shortening the left
+                    // stride turns the animal left, so a nose-left error has
+                    // to shorten the right.
+                    const float side = (l % 2 == 0) ? -1.0f : 1.0f;
+                    const float shrink =
+                        std::clamp(side * corr, -0.8f, 0.8f);
+                    const float fx = plan.plannedFoot(l, p / 6.2831853f).x;
+                    const float* fore = plan.basis(l, 0);
+                    for (int j = 0; j < kJointCount; ++j) {
+                        out[j] += fore[j] * (-fx * shrink);
+                    }
+                }
                 out[static_cast<int>(Joint::FTi)] += tonicFTi;
                 out[static_cast<int>(Joint::CTr)] += tonicCTr;
             } else {
@@ -894,6 +979,17 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
         const float pitch = std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f;
         worstPitch = std::max(worstPitch, std::fabs(pitch));
         {
+            const float ae = phys.world.maxAnchorError();
+            if (ae > worstAnchor) {
+                worstAnchor = ae;
+                anchorAtMs = t;
+            }
+            // Half a millimetre is a tear, not a wobble. At 0.1 mm this
+            // fired during runs that went on to walk perfectly well for
+            // two seconds.
+            if (burstMs < 0.0f && ae > 0.5f) burstMs = t;
+        }
+        {
             bool legDown[kLegCount] = {};
             for (const auto& c : phys.world.contacts) {
                 const int l = phys.probeLeg(c.probe);
@@ -914,6 +1010,15 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
                 loadPerLeg[bkt][l] += c.normalImpulse;
             }
             pitchSum[bkt] += pitch;
+            {
+                const Quat& o = phys.thorax().orientation;
+                const V3 f = o.rotate({1, 0, 0});
+                const V3 lt = o.rotate({0, 1, 0});
+                yawSum[bkt] += std::atan2(f.y, f.x) * 57.2958f;
+                rollSum[bkt] += std::asin(std::clamp(lt.z, -1.0f, 1.0f))
+                                * 57.2958f;
+                ySum[bkt] += phys.thorax().position.y;
+            }
             const float h = phys.bodyHeight();
             hMin[bkt] = std::min(hMin[bkt], static_cast<double>(h));
             hMax[bkt] = std::max(hMax[bkt], static_cast<double>(h));
@@ -977,17 +1082,19 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     // is dragging.
     const float meanFeet = contactSum / static_cast<float>(n);
     if (verbose) {
-        std::printf("\n%6s %8s %9s %8s %8s   %s\n", "t (s)", "pitch",
-                    "CoP-CoM", "hop mm", "|vz|", "share of load: fL fR mL mR hL hR");
+        std::printf("\n%6s %8s %8s %8s %8s %8s %8s   %s\n", "t (s)",
+                    "pitch", "roll", "yaw", "y mm", "hop mm", "|vz|",
+                    "share of load: fL fR mL mR hL hR");
         for (int k = 0; k < kBuckets; ++k) {
             if (bucketN[k] == 0) continue;
             const double tMid = gp.seconds * (k + 0.5) / kBuckets;
             const double cop = (copDen[k] > 0.0) ? copNum[k] / copDen[k] : 0.0;
             double tot = 0.0;
             for (int l = 0; l < kLegCount; ++l) tot += loadPerLeg[k][l];
-            std::printf("%6.2f %8.2f %9.4f %8.4f %8.2f  ", tMid,
-                        pitchSum[k] / bucketN[k], cop, hMax[k] - hMin[k],
-                        vzSum[k] / bucketN[k]);
+            std::printf("%6.2f %8.2f %8.2f %8.2f %8.3f %8.4f %8.2f  ", tMid,
+                        pitchSum[k] / bucketN[k], rollSum[k] / bucketN[k],
+                        yawSum[k] / bucketN[k], ySum[k] / bucketN[k],
+                        hMax[k] - hMin[k], vzSum[k] / bucketN[k]);
             for (int l = 0; l < kLegCount; ++l) {
                 std::printf(" %4.2f", (tot > 0.0) ? loadPerLeg[k][l] / tot : 0.0);
             }
@@ -1024,6 +1131,37 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     out.height = held;
     out.upright = moved && upright;
     out.peakRate = phys.peakJointRate();
+    out.worstAnchor = worstAnchor;
+    out.anchorAtMs = anchorAtMs;
+    out.burstMs = burstMs;
+    if (verbose) {
+        std::printf("worst anchor separation %.4f mm at %.0f ms\n"
+                    "speed ceiling: %zu angular, %zu linear; peak spin seen %.0f rad/s (ceiling %.0f)",
+                    worstAnchor, anchorAtMs, phys.world.clampAngular,
+                    phys.world.clampLinear, phys.world.peakAngularSeen,
+                    phys.world.params.maxAngularVelocity);
+        {
+            static const char* kBlameName[] = {"servo", "muscle", "limit",
+                                               "weld", "axis", "anchor"};
+            std::printf("\nlargest spin injected per constraint, rad/s:");
+            for (int bi = 0; bi < PhysicsWorld::kBlameCount; ++bi) {
+                std::printf("  %s=%.0f", kBlameName[bi], phys.world.blame[bi]);
+            }
+        }
+        {
+            int pl = -1, pk = -1;
+            if (phys.bodyPart(phys.world.peakAngularBody, pl, pk)) {
+                std::printf("   fastest body: %s link %d",
+                            legName(static_cast<LegId>(pl)), pk);
+            } else {
+                std::printf("   fastest body: trunk");
+            }
+        }
+        if (burstMs >= 0.0f) {
+            std::printf("   LINKAGE BURST at %.0f ms", burstMs);
+        }
+        std::printf("\n");
+    }
     return out;
 }
 
@@ -1038,6 +1176,7 @@ int footReport(int leg) {
     FlyBody skeleton;
     FlyPhysics phys;
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    if (g_tarsusRate > 0.0f) phys.params.tarsusServoRate = g_tarsusRate;
     phys.build(skeleton);
     for (int i = 0; i < 300; ++i) phys.step(kDt);
 
@@ -1131,6 +1270,18 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--probe-drive") == 0) {
             g_probeDrive = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--tau") == 0) {
+            g_tau = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--tarsusrate") == 0) {
+            g_tarsusRate = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--servospin") == 0) {
+            g_servoSpin = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--maxspin") == 0) {
+            g_maxSpin = std::stof(argv[i + 1]);
+        }
         if (std::strcmp(argv[i], "--from") == 0) {
             g_from = std::stof(argv[i + 1]);
         }
@@ -1174,6 +1325,8 @@ int main(int argc, char** argv) {
                 else if (!std::strcmp(a, "--liftmm")) gp.liftMm = std::stof(v);
                 else if (!std::strcmp(a, "--duty")) gp.duty = std::stof(v);
                 else if (!std::strcmp(a, "--share")) gp.shareGain = std::stof(v);
+                else if (!std::strcmp(a, "--yaw")) gp.yawGain = std::stof(v);
+                else if (!std::strcmp(a, "--yawrate")) gp.yawRateGain = std::stof(v);
                 else if (!std::strcmp(a, "--share-clamp")) gp.shareClamp = std::stof(v);
                 else if (!std::strcmp(a, "--joint-gait")) gp.planned = false;
                 else if (!std::strcmp(a, "--trials")) gp.trials = std::atoi(v);

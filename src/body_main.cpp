@@ -26,6 +26,7 @@
 #include "body/Anatomy.h"
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
+#include "body/GaitPlan.h"
 #include "body/MotorPools.h"
 #include "body/SensoryOrgans.h"
 #include "core/Connectome.h"
@@ -40,6 +41,61 @@
 using namespace fly;
 
 namespace {
+
+// Drive one frame of the gait, from the plan when there is one.
+//
+// Kept as a function because the headless and windowed loops both need it and
+// the last time this logic existed twice the two copies drifted.
+void driveGait(FlyPhysics& phys, const GaitPlan& plan, bool planned,
+               const GaitSpec& spec, float swing, const bool* tripodA,
+               float phase, float* zTrim, float dt) {
+    if (planned) {
+        // Load sharing, as in flyphys: six rigid legs under a rigid body is
+        // statically indeterminate, and without this the hind pair carries
+        // almost all of it.
+        float load[kLegCount] = {};
+        float total = 0.0f;
+        int stanceCount = 0;
+        bool inStance[kLegCount] = {};
+        for (int l = 0; l < kLegCount; ++l) {
+            const float pl = tripodA[l] ? phase : phase + 3.14159265f;
+            float u = pl / 6.2831853f;
+            u -= std::floor(u);
+            inStance[l] = u < spec.duty;
+            load[l] = phys.footLoad(l);
+            if (inStance[l]) {
+                total += load[l];
+                ++stanceCount;
+            }
+        }
+        if (stanceCount > 0 && total > 1e-9f) {
+            const float want = total / static_cast<float>(stanceCount);
+            for (int l = 0; l < kLegCount; ++l) {
+                if (!inStance[l]) continue;
+                zTrim[l] += 0.4f * ((load[l] - want) / want) * dt;
+                zTrim[l] = std::clamp(zTrim[l], -0.04f, 0.04f);
+            }
+        }
+    }
+    for (int l = 0; l < kLegCount; ++l) {
+        const float ph = tripodA[l] ? phase : phase + 3.14159265f;
+        if (planned) {
+            float q[kJointCount];
+            plan.targets(l, ph / 6.2831853f, q);
+            const float* up = plan.basis(l, 2);
+            for (int j = 0; j < kJointCount; ++j) {
+                phys.params.manualTarget[l][j] = q[j] + up[j] * zTrim[l];
+            }
+            continue;
+        }
+        phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
+            -swing * std::sin(ph);
+        const float c = std::cos(ph);
+        phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
+            (c > 0.0f) ? swing * 0.6f * c : 0.0f;
+    }
+}
+
 
 constexpr const char* kVert = R"(#version 330 core
 layout(location = 0) in vec3 aPos;
@@ -240,6 +296,20 @@ int run(int argc, char** argv) {
     // not a neuron. It is here so the walking can be watched.
     float gaitPeriodMs = 0.0f;
     float gaitSwing = 0.3f;
+    // The same foot-path gait flyphys measures, not a second copy of an
+    // older one.
+    //
+    // This file had its own two-joint sinusoid: ThC a sine, CTr a half-wave,
+    // no height correction, no load sharing. So the window showed a different
+    // animal from the one the harness reported on, and the harness was the
+    // only one anybody was reading. Every measured improvement to walking had
+    // simply never reached the picture. That makes four times in this project
+    // that two copies of the same thing have quietly disagreed.
+    GaitPlan gaitPlan;
+    GaitSpec gaitSpec;
+    bool gaitPlanned = true;
+    float servoTauMs = -1.0f;
+    float gaitZTrim[kLegCount] = {};
     // The arena. Walls default on in the 3D view so the fly is visibly in a
     // place rather than floating in a void, and default off in the engine so
     // the headless measurements are unchanged.
@@ -306,6 +376,11 @@ int run(int argc, char** argv) {
         else if (a == "--no-split") noSplit = true;
         else if (a == "--gait") gaitPeriodMs = std::stof(next("--gait"));
         else if (a == "--gait-swing") gaitSwing = std::stof(next("--gait-swing"));
+        else if (a == "--stride") gaitSpec.strideMm = std::stof(next("--stride"));
+        else if (a == "--liftmm") gaitSpec.liftMm = std::stof(next("--liftmm"));
+        else if (a == "--duty") gaitSpec.duty = std::stof(next("--duty"));
+        else if (a == "--joint-gait") gaitPlanned = false;
+        else if (a == "--tau") servoTauMs = std::stof(next("--tau"));
         else if (a == "--arena") arenaSize = std::stof(next("--arena"));
         else if (a == "--no-arena") showArena = false;
         else if (a == "--no-wings") showWings = false;
@@ -394,7 +469,12 @@ int run(int argc, char** argv) {
         phys.world.params.groundOn = !noGround;
         if (noGravity) phys.world.params.gravity = {0, 0, 0};
     }
+    if (servoTauMs > 0.0f) phys.world.params.servoTau = servoTauMs * 0.001f;
     if (gaitPeriodMs > 0.0f) phys.params.useManualTarget = true;
+    if (gaitPeriodMs > 0.0f && gaitPlanned) {
+        gaitSpec.periodMs = gaitPeriodMs;
+        gaitPlan.build(gaitSpec);
+    }
     float gaitClockMs = 0.0f;
     if (corrVel > 0.0f) phys.world.params.maxCorrectionVelocity = corrVel;
 
@@ -511,14 +591,8 @@ int run(int argc, char** argv) {
                     {true, false, false, true, true, false};
                 gaitClockMs += physDt * 1000.0f;
                 const float phase = 6.2831853f * gaitClockMs / gaitPeriodMs;
-                for (int l = 0; l < kLegCount; ++l) {
-                    const float ph = tripodA[l] ? phase : phase + 3.14159265f;
-                    phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
-                        -gaitSwing * std::sin(ph);
-                    const float c = std::cos(ph);
-                    phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
-                        (c > 0.0f) ? gaitSwing * 0.6f * c : 0.0f;
-                }
+                driveGait(phys, gaitPlan, gaitPlanned, gaitSpec, gaitSwing,
+                          tripodA, phase, gaitZTrim, physDt);
             }
             phys.step(physDt, pools);
 
@@ -773,14 +847,8 @@ int run(int argc, char** argv) {
                     {true, false, false, true, true, false};
                 gaitClockMs += frameMs;
                 const float phase = 6.2831853f * gaitClockMs / gaitPeriodMs;
-                for (int l = 0; l < kLegCount; ++l) {
-                    const float ph = tripodA[l] ? phase : phase + 3.14159265f;
-                    phys.params.manualTarget[l][static_cast<int>(Joint::ThC)] =
-                        -gaitSwing * std::sin(ph);
-                    const float c = std::cos(ph);
-                    phys.params.manualTarget[l][static_cast<int>(Joint::CTr)] =
-                        (c > 0.0f) ? gaitSwing * 0.6f * c : 0.0f;
-                }
+                driveGait(phys, gaitPlan, gaitPlanned, gaitSpec, gaitSwing,
+                          tripodA, phase, gaitZTrim, frameMs / 1000.0f);
             }
             phys.step(frameMs / 1000.0f, pools);
             // Close the loop: body state drives the proprioceptors, which

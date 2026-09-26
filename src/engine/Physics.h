@@ -223,6 +223,53 @@ public:
         // well above anything a fly actually does (a leg segment sweeping at
         // 400 rad/s moves its tip at ~200 mm/s).
         float maxAngularVelocity = 400.0f;   // rad/s
+
+        // Fastest relative spin the position servo is allowed to ask a joint
+        // for, rad/s.
+        //
+        // The servo's target rate was servoRate * error * invDt, which at
+        // servoRate 0.9 and 8 kHz substeps is 7200 rad/s for every radian of
+        // error: it demands the whole error be erased inside a fraction of
+        // one substep. Standing, the errors are small enough that nothing
+        // notices. Walking, they reach a few tenths of a radian, the servo
+        // asks for thousands of rad/s, and the body speed ceiling above then
+        // fires -- 12,249 times in two seconds -- rescaling one body's
+        // velocity without its neighbours and pulling the joints apart that
+        // the solver had just satisfied. The linkage burst that ended every
+        // long run was this, not a loss of balance: the anchor error went
+        // from 0.047 mm to 1.42 mm in a single step while height, pitch and
+        // contacts were all still normal.
+        //
+        // Tying controller stiffness to the integrator's timestep is the
+        // actual error. It is also why finer substeps made things worse
+        // rather than better, which had been read as the model being
+        // chaotic.
+        // Left wide. Bounding it to 200 measured far worse -- peak spin
+        // went from 29,000 rad/s to 1.4 million -- because the stiff servo
+        // was the thing holding the tarsal chain together, and the runaway
+        // was in the unclamped angular constraints below rather than here.
+        // Kept as a knob because the coupling to invDt is still wrong.
+        float maxServoSpin = 20000.0f;  // rad/s
+
+        // Time constant of the position servo, seconds. Zero keeps the old
+        // behaviour.
+        //
+        // The servo asked for servoRate * error * invDt, which is a gain of
+        // 7200 rad/s per radian at 8 kHz: it demands the whole error be
+        // erased inside a fraction of one substep, and it demands more of it
+        // the finer the substep. That is a controller tuned by the
+        // integrator. Capping the demand does not fix it, because small
+        // errors still see the full gain -- measured, a cap of 300 rad/s only
+        // moved the failure later. Dividing by a real time constant lowers
+        // the gain everywhere and makes the servo mean the same thing at any
+        // timestep.
+        //
+        // 1 ms. At the old, timestep-derived 0.1125 ms the distal tarsomere
+        // reached 2.2 million rad/s and the linkage tore itself apart inside
+        // four seconds every time; at 1 ms the peak is 3,005 rad/s and it
+        // does not. Slower than about 3 ms and the servo is too soft to
+        // carry a stride.
+        float servoTau = 0.001f;  // seconds
         float maxLinearVelocity = 3000.0f;   // mm/s
 
         // Ceiling on the split-impulse correction velocity.
@@ -239,6 +286,30 @@ public:
         // high and persistent joint error drives the fly upward.
         float maxCorrectionVelocity = 150.0f;  // mm/s
     };
+
+    // How many times the speed ceiling has actually fired.
+    //
+    // The clamp runs after the solvers, which is where it has to be if it is
+    // to bound constraint impulses at all -- but it scales one body's
+    // velocity without touching its neighbours, so every time it fires it
+    // breaks the joint the solver has just satisfied. A linkage that comes
+    // apart in a single step is exactly what that looks like from outside.
+    std::size_t clampHits = 0;
+    std::size_t clampLinear = 0;
+    std::size_t clampAngular = 0;
+    float peakAngular = 0.0f;      // largest speed that was clamped
+    float peakAngularSeen = 0.0f;  // largest seen at all
+    std::uint32_t peakAngularBody = 0;
+
+    // Which constraint block put the spin there.
+    //
+    // Six different places apply angular impulses and every guess about which
+    // one was responsible for the distal tarsomere reaching 13,000 rad/s was
+    // wrong -- the servo, the speed ceiling, the Baumgarte terms, the tarsal
+    // stiffness and the tarsomere mass were each ruled out by experiment.
+    // This records the largest change in spin each block actually applies.
+    enum Blame { kServo, kMuscle, kLimit, kWeld, kAxis, kAnchor, kBlameCount };
+    float blame[kBlameCount] = {};
 
     Params params;
     std::vector<RigidBody> bodies;

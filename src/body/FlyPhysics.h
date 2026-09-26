@@ -156,6 +156,19 @@ public:
         float postureTorque = 6.0e6f;
         // Fraction of joint angle error corrected per substep.
         float servoRate = 0.9f;
+        // Servo rate for the tarsomere joints, separately from the leg.
+        //
+        // They had the leg's 0.9, which with the servo's want =
+        // servoRate * error * invDt means a demanded spin of 7200 rad/s per
+        // radian of error at 8 kHz. A leg joint never achieves that: its
+        // bounded torque cannot move that much inertia in a substep. A
+        // tarsomere has almost none, so it achieves it exactly. Standing, the
+        // errors are small and the peak spin anywhere in the animal is 183
+        // rad/s. Walking, the distal tarsomere reaches 13,000 rad/s even in
+        // runs that look perfectly healthy, and the body speed ceiling then
+        // fires thousands of times a second, each firing rescaling one body
+        // without its neighbours and prising the joints apart.
+        float tarsusServoRate = 0.9f;
         float jointDamping = 0.6f;
         // Extra torque a fully activated muscle adds on top of posture, and
         // how far it shifts the joint's target angle.
@@ -255,6 +268,11 @@ public:
     // units of median-motor-neuron force, so peak torque in physical
     // units is this times maxMuscleTorque.
     float peakDrive() const { return peakDrive_; }
+    // Which leg and link a body index belongs to, so a diagnostic can name
+    // the part rather than print a number. link 0..4 are the five leg
+    // segments; 5 and up are tarsomeres. Returns false for the trunk.
+    bool bodyPart(std::uint32_t body, int& leg, int& link) const;
+
     // Total mass of every body, micrograms.
     float totalMass() const;
     // Mass-weighted centre of the whole animal, world millimetres. The thorax
