@@ -120,6 +120,14 @@ stride 0.24 period 45    2 of 3 upright, 1 of 3 burst    3.83 mm/s
 stride 0.32 period 80    2 of 3 upright, 1 of 3 burst    4.57 mm/s
 ```
 
+Those are 8 s, 3 trials. Confirmed at 12 s, 5 trials:
+
+```
+stride 0.24 period 60    4 of 5 upright, 1 of 5 burst    3.89 mm/s
+stride 0.32 period 60    0 of 5 upright, 5 of 5 burst
+stride 0.42 period 40    0 of 5 upright, 5 of 5 burst
+```
+
 And at 4 s, strides of 0.02 and 0.10 survive while 0.05 and 0.16 do not.
 **That is not a dose-response.** It is a latent solver divergence that the gait
 merely decides when to trigger — see [01-solver-physics.md](01-solver-physics.md)
