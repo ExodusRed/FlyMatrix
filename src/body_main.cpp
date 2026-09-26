@@ -213,6 +213,12 @@ int run(int argc, char** argv) {
     float pulseMs = 20.0f;
     long frameLimit = 0;
     std::string shotPath;
+    // Save a numbered frame every N frames, so the motion can be looked
+    // at rather than inferred from statistics. Whole sessions of this
+    // project were spent tuning numbers without once watching the fly
+    // move, and the limbs were visibly glitching the entire time.
+    std::string filmPath;
+    long filmEvery = 10;
     bool dumpPose = false;
     bool usePhysics = true;
     float dropMs = 0.0f;
@@ -276,6 +282,8 @@ int run(int argc, char** argv) {
         else if (a == "--pulse") pulseMs = std::stof(next("--pulse"));
         else if (a == "--frames") frameLimit = std::atol(next("--frames").c_str());
         else if (a == "--screenshot") shotPath = next("--screenshot");
+        else if (a == "--film") filmPath = next("--film");
+        else if (a == "--film-every") filmEvery = std::atol(next("--film-every").c_str());
         else if (a == "--dump-pose") dumpPose = true;
         else if (a == "--no-physics") usePhysics = false;
         else if (a == "--drop") dropMs = std::stof(next("--drop"));
@@ -1035,6 +1043,14 @@ int run(int argc, char** argv) {
             }
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);
+        }
+
+        if (!filmPath.empty() && filmEvery > 0 &&
+            frame % static_cast<std::uint64_t>(filmEvery) == 0) {
+            char name[512];
+            std::snprintf(name, sizeof(name), "%s%04llu.bmp", filmPath.c_str(),
+                          static_cast<unsigned long long>(frame / filmEvery));
+            saveScreenshot(name, w, h);
         }
 
         const bool last = frameLimit > 0 &&

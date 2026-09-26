@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "body/Anatomy.h"
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
 
@@ -99,6 +100,7 @@ float g_probeDrive = 1.5f;
 float g_hillVmax = -1.0f;
 int g_hill = -1;
 int g_inter = -1;
+int g_upper = -1;
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
@@ -111,6 +113,7 @@ Result run(float ms, int forceJoint, float forceDrive, int forceLeg = -1) {
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
+    if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = forceJoint;
@@ -249,6 +252,7 @@ int traceOne(const std::string& jointName_, float drive) {
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
+    if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
     if (g_abdMass >= 0.0f) phys.params.abdomenMass = g_abdMass;
     if (g_abdX != 0.0f) phys.params.abdomenOffsetX = g_abdX;
     phys.params.forceJoint = joint;
@@ -437,6 +441,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
     if (g_minseg > 0.0f) phys.params.minSegmentMass = g_minseg;
     if (g_mintar > 0.0f) phys.params.minTarsomereMass = g_mintar;
+    if (g_upper >= 0) phys.params.upperLegProbes = (g_upper != 0);
     if (g_hill >= 0) phys.params.hillMuscle = (g_hill != 0);
     if (g_hillVmax > 0.0f) phys.params.hillShorteningRate = g_hillVmax;
     phys.params.useManualTarget = !gp.forceMode;
@@ -657,6 +662,60 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     return out;
 }
 
+// Per-segment report for one leg: where each piece sits, how big a gap there
+// is to the next one, and whether it is touching the floor.
+//
+// Built because the fly was visibly coming apart on screen while every number
+// in this harness said it was fine. The worst anchor error, 0.0616 mm, renders
+// at roughly 370 px/mm as a 23-pixel break between tibia and tarsus -- plainly
+// visible, and dismissed for two sessions as a small number.
+int footReport(int leg) {
+    FlyBody skeleton;
+    FlyPhysics phys;
+    if (g_tarsus > 0.0f) phys.params.tarsusStiffness = g_tarsus;
+    phys.build(skeleton);
+    for (int i = 0; i < 300; ++i) phys.step(kDt);
+
+    std::vector<FlyBody::SegmentPose> pose;
+    phys.readPose(pose);
+
+    std::printf("=== leg %s after settling ===\n",
+                legName(static_cast<LegId>(leg)));
+    std::printf("%-10s %9s %9s %9s %9s  %s\n",
+                "segment", "prox z", "dist z", "radius", "gap um", "contact");
+
+    // The leg's own five segments, then its tarsomeres, which live past the
+    // first kLegCount*kJointCount entries of segments_.
+    std::vector<std::size_t> idx;
+    for (int j = 0; j < kJointCount; ++j) {
+        idx.push_back(static_cast<std::size_t>(leg) * kJointCount + j);
+    }
+    const std::size_t tarsBase =
+        static_cast<std::size_t>(kLegCount) * kJointCount +
+        static_cast<std::size_t>(leg) * (anat::kTarsomereCount - 1);
+    for (int k = 0; k < anat::kTarsomereCount - 1; ++k) {
+        idx.push_back(tarsBase + static_cast<std::size_t>(k));
+    }
+
+    static const char* names[] = {"coxa", "troch", "femur", "tibia", "ta1",
+                                  "ta2", "ta3", "ta4", "ta5"};
+    for (std::size_t n = 0; n < idx.size(); ++n) {
+        if (idx[n] >= pose.size()) continue;
+        const auto& s = pose[idx[n]];
+        float gap = 0.0f;
+        if (n + 1 < idx.size() && idx[n + 1] < pose.size()) {
+            gap = length(pose[idx[n + 1]].a - s.b) * 1000.0f;
+        }
+        const bool touching = s.b.z <= s.radius + 0.002f;
+        std::printf("%-10s %9.4f %9.4f %9.4f %9.1f  %s\n",
+                    names[n], s.a.z, s.b.z, s.radius, gap,
+                    touching ? "yes" : "");
+    }
+    std::printf("\nworst anchor error over all joints: %.4f mm at joint %zu\n",
+                phys.world.maxAnchorError(), phys.world.worstAnchorJoint());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     for (int i = 1; i < argc - 1; ++i) {
         if (std::strcmp(argv[i], "--posture") == 0) {
@@ -695,6 +754,9 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--friction") == 0) {
             g_friction = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--no-upper") == 0) {
+            g_upper = 0;
+        }
         if (std::strcmp(argv[i], "--mintar") == 0) {
             g_mintar = std::stof(argv[i + 1]);
         }
@@ -713,6 +775,9 @@ int main(int argc, char** argv) {
         return traceOne(argv[2], drive);
     }
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--foot") == 0) {
+            return footReport((i + 1 < argc) ? std::atoi(argv[i + 1]) : 2);
+        }
         if (std::strcmp(argv[i], "--gait") == 0) {
             // Named rather than positional. Seven positional arguments was
             // already one too many to remember, and the controller search

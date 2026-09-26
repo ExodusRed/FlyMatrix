@@ -55,12 +55,18 @@ struct LegLayout {
 // Drosophila: three pairs on the thorax, front legs shortest and angled
 // forward, hind legs longest and angled back.
 constexpr LegLayout kLayout[kLegCount] = {
-    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, { 0.049f, -1.538f, -0.115f,  2.129f, -2.219f}},
-    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, { 0.049f, -1.538f, -0.115f,  2.129f, -2.219f}},
-    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, { 0.025f, -0.588f, -0.051f,  2.143f, -0.068f}},
-    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, { 0.025f, -0.588f, -0.051f,  2.143f, -0.068f}},
-    // Solved so the tarsus lies flat along the ground rather than touching
-    // at its tip, which is what the five tarsomeres are for. The front
+    {LegId::FrontL,   0.34f, +1.0f, 0.88f, 0.657f, {-1.237f,  0.546f,  0.011f,  2.069f, -2.943f}},
+    {LegId::FrontR,   0.34f, -1.0f, 0.88f, 0.657f, {-1.237f,  0.546f,  0.011f,  2.069f, -2.943f}},
+    {LegId::MiddleL,  0.02f, +1.0f, 1.00f, 0.909f, {-1.092f,  0.941f, -0.044f,  1.627f,  0.039f}},
+    {LegId::MiddleR,  0.02f, -1.0f, 1.00f, 0.909f, {-1.092f,  0.941f, -0.044f,  1.627f,  0.039f}},
+    // Solved so the tarsus lies flat along the ground AND every joint above
+    // it clears the floor.
+    //
+    // The clearance is the part that was missing. The solve constrained the
+    // ankle and said nothing about the joints in between, so it produced a
+    // stance whose femur ended 85 um *below* ground. Nothing caught it,
+    // because the upper leg had no collision either -- the femur and tibia
+    // simply ran underground, and on screen the leg looked broken in half. The front
     // tarsus points forward and the hind one trails back, as a real fly's
     // do; forcing them all one way jams a leg against its TiTa limit.
     //
@@ -71,8 +77,8 @@ constexpr LegLayout kLayout[kLegCount] = {
     // the geometry's wishes; it is what the geometry prefers once ThC is free
     // to swing. The ThC gradient across the leg pairs, -0.841 front to -0.061
     // hind, is what used to be faked by folding the front legs backwards.
-    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, { 0.434f, -0.188f, -0.017f,  1.672f, -0.367f}},
-    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, { 0.434f, -0.188f, -0.017f,  1.672f, -0.367f}},
+    {LegId::HindL,   -0.30f, +1.0f, 1.12f, 0.893f, {-0.819f,  1.564f, -0.024f,  0.752f,  0.053f}},
+    {LegId::HindR,   -0.30f, -1.0f, 1.12f, 0.893f, {-0.819f,  1.564f, -0.024f,  0.752f,  0.053f}},
 };
 
 // Segment lengths for a middle leg, in millimetres, scaled per leg above.
@@ -149,23 +155,23 @@ FlyBody::FlyBody() {
         // protraction left against 1.74 of retraction: they could only ever
         // drag backwards, which is what pitched the body during the gait
         // test.
-        leg.joints[0] = {kLeft, L.rest[0], -1.6f, 1.6f, kCoxaLen * s, 0.045f};
+        leg.joints[0] = {kLeft, L.rest[0], anat::kJointLimit[0][0], anat::kJointLimit[0][1], kCoxaLen * s, 0.045f};
         // CTr depresses: it swings the femur down within the leg's own plane,
         // about the local lateral axis. This is the joint the tergotrochanteral
         // jump muscle acts on, and it is the joint that levers the body off the
         // ground -- an abduction axis here cannot generate lift at all, in
         // either direction, which is what the earlier version did.
-        leg.joints[1] = {kLeft, L.rest[1], -2.8f, 2.0f, kTrochLen * s, 0.040f};
+        leg.joints[1] = {kLeft, L.rest[1], anat::kJointLimit[1][0], anat::kJointLimit[1][1], kTrochLen * s, 0.040f};
         // TrF twists the femur about its own long axis, which by now is the
         // frame's local Z.
-        leg.joints[2] = {kUp * L.side, L.rest[2], -0.9f, 0.9f, kFemurLen * s, 0.036f};
+        leg.joints[2] = {kUp * L.side, L.rest[2], anat::kJointLimit[2][0], anat::kJointLimit[2][1], kFemurLen * s, 0.036f};
         // FTi is the knee, the joint with the largest range, hinging about the
         // same local lateral axis.
-        leg.joints[3] = {kLeft, L.rest[3], -1.0f, 3.3f, kTibiaLen * s, 0.028f};
+        leg.joints[3] = {kLeft, L.rest[3], anat::kJointLimit[3][0], anat::kJointLimit[3][1], kTibiaLen * s, 0.028f};
         // TiTa is the ankle, bending the same way but less.
         // Widened from -1.2: laying the tarsus flat on a trailing hind leg
         // needs more range than that, and it jammed against the limit.
-        leg.joints[4] = {kLeft, L.rest[4], -3.3f, 1.5f, kTarsusLen * s, 0.020f};
+        leg.joints[4] = {kLeft, L.rest[4], anat::kJointLimit[4][0], anat::kJointLimit[4][1], kTarsusLen * s, 0.020f};
     }
     resetPose();
     root.position = {0, 0, 0.62f};

@@ -12,7 +12,13 @@ Prints the angles to paste back into FlyBody.cpp.
 """
 from __future__ import annotations
 
+import pathlib
+import re
+import sys
+
 import numpy as np
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Must match FlyBody.cpp.
 BODY_Z = 0.62
@@ -21,6 +27,8 @@ GROUND_Z = 0.0
 # The ankle rides a tarsus-radius above the floor so the tarsus lying flat
 # rests on it rather than through it.
 ANKLE_Z = 0.020
+# Every joint down the leg must sit at least this far above the floor.
+GROUND_CLEARANCE = 0.015
 
 # Mirrors src/body/Anatomy.h. If these disagree the solved rest pose is
 # for a different animal than the one that gets built.
@@ -29,7 +37,7 @@ SEG = dict(coxa=0.26, troch=0.09, femur=0.54, tibia=0.50, tarsus=0.55)
 LEGS = [
     # name, attachX, lengthScale, target foot (x, y, z) for the LEFT leg,
     # fixed outward mount tilt (radians, about the fore-aft axis)
-    ("front",  0.34, 0.88, (0.62, 0.70, ANKLE_Z), 0.657),
+    ("front",  0.34, 0.88, (0.48, 0.64, ANKLE_Z), 0.657),
     ("middle", 0.02, 1.00, (-0.15, 0.92, ANKLE_Z), 0.909),
     ("hind",  -0.30, 1.12, (-1.12, 0.88, ANKLE_Z), 0.893),
 ]
@@ -54,13 +62,24 @@ AXES = np.array([
 # FTi is allowed to bend either way. A real fly's front legs fold with the
 # tibia swinging back and the hind legs with it swinging forward, so forcing
 # one sign made the hind leg's knee undo its own backward reach.
-LIMITS = np.array([
-    [-0.9, 0.9],
-    [-1.6, 1.6],
-    [-0.9, 0.9],
-    [-2.6, 2.6],
-    [-2.3, 2.3],
-])
+def _limits_from_header():
+    """Read the joint limits out of src/body/Anatomy.h.
+
+    Parsed rather than copied. These were duplicated here as literals and
+    drifted from the C++ on four joints out of five, so the solver produced
+    poses the physics rejected on the first step -- every leg's knee started
+    outside its limit and the fly stood 0.37 mm too high on four feet.
+    """
+    src = (ROOT / "src" / "body" / "Anatomy.h").read_text(encoding="utf-8")
+    body = src[src.index("kJointLimit[5][2] = {"):]
+    body = body[:body.index("};")]
+    rows = re.findall(r"\{\s*(-?[0-9.]+)f\s*,\s*(-?[0-9.]+)f\s*\}", body)
+    if len(rows) != 5:
+        sys.exit("could not parse kJointLimit from Anatomy.h")
+    return np.array([[float(a), float(b)] for a, b in rows])
+
+
+LIMITS = _limits_from_header()
 
 JOINT_NAMES = ["ThC", "CTr", "TrF", "FTi", "TiTa"]
 
@@ -87,6 +106,18 @@ def quat_rotate(q, v):
     qv = q[1:]
     t = 2.0 * np.cross(qv, v)
     return v + q[0] * t + np.cross(qv, t)
+
+
+def joint_positions(angles, attach, lengths, mount):
+    """Every joint position down the leg, for checking ground clearance."""
+    out = []
+    pos = np.array(attach, dtype=float)
+    rot = quat_axis_angle(np.array([1.0, 0.0, 0.0]), mount)
+    for i in range(5):
+        rot = quat_mul(rot, quat_axis_angle(AXES[i], angles[i]))
+        pos = pos + quat_rotate(rot, np.array([0.0, 0.0, -1.0])) * lengths[i]
+        out.append(pos.copy())
+    return out
 
 
 def chain(angles, attach, lengths, mount, n):
@@ -212,8 +243,20 @@ def solve_leg(attach_x, scale, target, mount, branch):
                     - np.array(target))
                 margin = np.min(np.minimum(angles - limits[:, 0],
                                            limits[:, 1] - angles))
+                # Penalise a knee, or any other joint, that ends up below the
+                # floor.
+                #
+                # Nothing used to stop this. The solve constrains the ankle and
+                # the foot target and says nothing about the joints in between,
+                # so it happily produced a stance whose femur ended 85 um under
+                # the ground. The physics then had no collision on the upper leg
+                # either, so the femur and tibia simply ran underground and the
+                # leg looked broken in half on screen.
+                below = 0.0
+                for q in joint_positions(angles, attach, lengths, mount):
+                    below += max(0.0, GROUND_CLEARANCE - q[2])
                 # Penalise solutions pressed against a joint limit.
-                score = err + max(0.0, 0.05 - margin) * 2.0
+                score = err + max(0.0, 0.05 - margin) * 2.0 + below * 20.0
                 if score < best_score:
                     best, best_score = angles, score
     return best, best_score, attach, lengths

@@ -145,6 +145,30 @@ constexpr float kFemurLen = 0.54f;
 constexpr float kTibiaLen = 0.50f;
 constexpr float kTarsusLen = 0.55f;
 
+// Joint limits, radians, in the order ThC, CTr, TrF, FTi, TiTa.
+//
+// ONE COPY. These used to live as literals in FlyBody.cpp and again as a
+// LIMITS array in tools/solve_rest_pose.py, and they drifted apart on four
+// joints out of five -- ThC +/-0.9 against +/-1.6, CTr +/-1.6 against
+// -2.8/+2.0, FTi +/-2.6 against -1.0/+3.3, TiTa +/-3.0 against -3.3/+1.5.
+//
+// The rest-pose solver was therefore producing poses that the physics
+// immediately rejected: every leg's FTi rest angle came out below the C++
+// minimum, the limit constraint shoved all six on the first step, and the fly
+// stood at 0.93 mm with four feet down instead of 0.55 with six. The solver
+// reads these values out of this header now, so they cannot drift again.
+//
+// Asymmetric because a real leg's are: a knee has far more flexion than
+// hyperextension, and the rest pose has to sit inside them with room to move
+// both ways.
+constexpr float kJointLimit[5][2] = {
+    {-1.6f, 1.6f},   // ThC   protraction / retraction
+    {-2.8f, 2.0f},   // CTr   levation / depression
+    {-0.9f, 0.9f},   // TrF   femur rotation
+    {-1.0f, 3.3f},   // FTi   the knee
+    {-3.0f, 3.0f},   // TiTa  the ankle, needs range to lay the tarsus flat
+};
+
 // How the tarsus divides. ta1 takes the largest share and ta5 is slightly
 // longer than ta4 because it carries the pretarsus.
 constexpr int kTarsomereCount = 5;

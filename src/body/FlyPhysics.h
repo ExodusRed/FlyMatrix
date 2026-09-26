@@ -66,6 +66,10 @@ public:
         // it, and enabling the probes pushed the body from 0.55 mm to 0.94
         // and left one foot down.
         bool tarsusProbes = true;
+        // Contact points on the coxa, trochanter, femur and tibia too.
+        // Without them the upper leg has no collision at all and runs
+        // straight through the floor.
+        bool upperLegProbes = true;
 
         // Lowered from 12 once the rest pose was re-solved for the new leg
         // lengths: at 12 the fly could not lift a swing leg without falling,

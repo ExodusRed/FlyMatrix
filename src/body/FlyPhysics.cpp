@@ -246,6 +246,31 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     world.probes.push_back({abdomen_, {-0.2f, 0, -anat::kAbdomenHalf.z}, 0.05f});
     world.probes.push_back({head_, {0.0f, 0, -anat::kHeadHalf.z}, 0.05f});
 
+    // Every leg segment gets a contact point at its distal end, not just the
+    // tarsus.
+    //
+    // Until here the coxa, trochanter, femur and tibia had no collision at
+    // all and went straight through the floor -- measured on a standing fly,
+    // the middle-left femur ended 85 um *below* ground and the tibia ran
+    // underground for its whole length. On screen the upper leg vanished into
+    // the floor and the tarsus lay on the surface, so the leg looked broken in
+    // half. Two sessions were spent tuning gait statistics without noticing,
+    // because no number in the harness looked at where the leg actually was.
+    for (int l = 0; params.upperLegProbes && l < kLegCount; ++l) {
+        for (int j = 0; j < kJointCount - 1; ++j) {
+            const SegmentRef& sref =
+                segments_[static_cast<std::size_t>(l) * kJointCount + j];
+            // Both ends, which approximates the segment as the capsule it is
+            // drawn as. A single probe at the distal tip leaves the proximal
+            // end free to sink: measured on a standing fly, the last
+            // tarsomere's proximal end sat 26 um under the floor while its
+            // tip rested on top of it.
+            world.probes.push_back({sref.body, {0, 0, 0}, sref.radius});
+            world.probes.push_back({sref.body, {0, 0, -sref.length},
+                                    sref.radius});
+        }
+    }
+
     // The tarsus now has five segments and, until here, one contact point at
     // the very tip. That would have made a jointed foot sink through the
     // floor more visibly than the single rod it replaced, so each tarsomere
@@ -253,14 +278,35 @@ void FlyPhysics::build(const FlyBody& skeleton) {
     // kLegCount probe indices as the foot tips in leg order.
     probeLeg_.assign(world.probes.size(), -1);
     for (int l = 0; l < kLegCount; ++l) probeLeg_[l] = l;
+    // The upper-leg probes were pushed after the trunk probes, in leg-major
+    // order, so map them back to their leg.
+    if (params.upperLegProbes) {
+        const std::size_t upperBase = kLegCount + 3;
+        const std::size_t perLeg = 2 * (kJointCount - 1);
+        for (int l = 0; l < kLegCount; ++l) {
+            for (std::size_t j = 0; j < perLeg; ++j) {
+                const std::size_t k =
+                    upperBase + static_cast<std::size_t>(l) * perLeg + j;
+                if (k < probeLeg_.size()) probeLeg_[k] = l;
+            }
+        }
+    }
     for (int l = 0; params.tarsusProbes && l < kLegCount; ++l) {
         const std::uint32_t last = footSegment_[l];
         const std::uint32_t first = last - (anat::kTarsomereCount - 2);
-        for (std::uint32_t k = first; k < last; ++k) {
+        for (std::uint32_t k = first; k <= last; ++k) {
             const SegmentRef& sref = segments_[k];
-            world.probes.push_back({sref.body, {0, 0, -sref.length},
-                                    sref.radius});
+            // Both ends again. The distal tip of the last tarsomere already
+            // has a probe from the foot loop above, so this adds the
+            // proximal ends that were letting the chain sag through the
+            // floor between its contact points.
+            world.probes.push_back({sref.body, {0, 0, 0}, sref.radius});
             probeLeg_.push_back(l);
+            if (k < last) {
+                world.probes.push_back({sref.body, {0, 0, -sref.length},
+                                        sref.radius});
+                probeLeg_.push_back(l);
+            }
         }
     }
 
