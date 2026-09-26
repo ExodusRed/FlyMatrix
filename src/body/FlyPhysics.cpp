@@ -478,6 +478,18 @@ void FlyPhysics::advance(float dtSeconds) {
     airborne_ = world.contacts.empty();
 }
 
+V3 FlyPhysics::centreOfMass() const {
+    V3 sum{0, 0, 0};
+    float m = 0.0f;
+    for (const auto& b : world.bodies) {
+        if (b.invMass <= 0.0f) continue;
+        const float bm = 1.0f / b.invMass;
+        sum = sum + b.position * bm;
+        m += bm;
+    }
+    return (m > 0.0f) ? sum * (1.0f / m) : V3{0, 0, 0};
+}
+
 float FlyPhysics::totalMass() const {
     float m = 0.0f;
     for (const auto& b : world.bodies) {

@@ -97,6 +97,10 @@ float g_mintar = -1.0f;
 // graded -- below a threshold the posture servo holds, above it the joint
 // slams to its stop.
 float g_probeDrive = 1.5f;
+// Dense trace window, seconds. The bucket table said a run was steady and
+// then was not; this prints every frame across the transition, so the event
+// can be read rather than inferred from ten samples in twelve seconds.
+float g_from = -1.0f, g_to = -1.0f;
 float g_hillVmax = -1.0f;
 int g_hill = -1;
 int g_inter = -1;
@@ -340,6 +344,27 @@ struct GaitParams {
     // velocity.
     float stepGain = 0.0f;
 
+    // Cancel the foot lift that the stepping joint itself produces.
+    //
+    // ThC swings the leg, and at the rest pose the foot's height depends
+    // on ThC to first order -- dz/dThC is -0.49 mm/rad on the front legs
+    // and +0.90 on the hind, opposite in sign. A 0.4 rad step therefore
+    // drives the front feet 0.2 mm down while the hind feet go 0.36 mm up,
+    // sixteen times a second. That is not a gait with a bit of bounce on
+    // it; it is a pitch oscillator that happens to also move forwards, and
+    // it is what the body was visibly doing.
+    //
+    // 1.0 applies the full first-order cancellation, 0 leaves the old
+    // behaviour for comparison.
+    // 0.9 rather than 1.0. Cancelling the lift exactly was measured worse
+    // than cancelling nine tenths of it -- 8 of 9 trials upright against 9 of
+    // 9 -- and the exact table is within 6% of the linear estimate, so this
+    // is not the linearisation running out. A foot held at precisely constant
+    // height has no vertical give at all, and the last tenth of the
+    // correction is what lets a stance leg absorb a bad step instead of
+    // levering against it.
+    float levelGain = 0.9f;
+
     // Drive the joints as forces through the muscle model, rather than as
     // position targets held by the posture servo.
     //
@@ -366,12 +391,169 @@ struct GaitParams {
     // becomes more than a weaker servo.
     float tonic = 0.0f;
 
+    // Seconds of walking per trial. Two was enough to compare settings and
+    // is not enough to claim the fly walks: a gait can look fine for two
+    // seconds and fall over in the third.
+    float seconds = 2.0f;
+
     int trials = 5;
     // Starting-height offset for a single verbose trial, so a particular
     // failing trajectory can be reproduced and watched.
     float jitter = 0.0f;
 };
 
+// How much the foot rises when the stepping joint swings.
+//
+// ThC is the joint that takes the step, and the gait drives it with a
+// sinusoid. If the foot moved purely fore and aft that would be all it
+// did. It does not: at the rest pose every leg sits well away from ThC
+// zero -- the front legs at -1.237 rad -- and away from zero the foot's
+// height depends on ThC to *first order*, so half the step comes out as
+// lift. The measured hop scales linearly with swing amplitude, which is
+// the signature of exactly this and not of the leg vaulting over its own
+// foot, which would be quadratic.
+//
+// The correction is one number per leg: the CTr offset that cancels the
+// height the ThC offset just introduced, read off the forward kinematics
+// rather than guessed. It is a linearisation, good while the swing is
+// small, and it is what a Cartesian foot trajectory would do properly.
+// Samples of the exact correction, spanning +/- kLevelSpan radians of ThC.
+// The first-order coefficient is right at the rest pose and drifts away from
+// it; over a 0.4 rad swing that drift is a third of the correction. Solving
+// the height exactly at each of these and interpolating costs nothing at run
+// time, because it is all done once before the trial starts.
+constexpr int kLevelSamples = 65;
+constexpr float kLevelSpan = 1.0f;
+
+struct HeightComp {
+    float dzdThC[kLegCount] = {};
+    float dzdCTr[kLegCount] = {};
+    float ctrPerThC[kLegCount] = {};
+    float table[kLegCount][kLevelSamples] = {};
+};
+
+// The CTr offset that puts the foot back at its rest height, given a ThC
+// offset. Bisection on CTr: foot height is monotone in CTr over the range a
+// leg actually uses, and a bracket that fails to straddle simply returns the
+// linear estimate.
+float solveCtrForHeight(FlyBody& b, LegId id, float restZ, float thcRest,
+                        float ctrRest, float thcOff, float linear) {
+    b.setAngle(id, Joint::ThC, thcRest + thcOff);
+    auto heightAt = [&](float ctrOff) {
+        b.setAngle(id, Joint::CTr, ctrRest + ctrOff);
+        return b.footPosition(id).z - restZ;
+    };
+    float lo = linear - 1.0f, hi = linear + 1.0f;
+    float flo = heightAt(lo), fhi = heightAt(hi);
+    float result = linear;
+    if (flo * fhi < 0.0f) {
+        for (int it = 0; it < 40; ++it) {
+            const float mid = 0.5f * (lo + hi);
+            const float fm = heightAt(mid);
+            if (flo * fm <= 0.0f) { hi = mid; fhi = fm; }
+            else { lo = mid; flo = fm; }
+        }
+        result = 0.5f * (lo + hi);
+    }
+    b.setAngle(id, Joint::CTr, ctrRest);
+    b.setAngle(id, Joint::ThC, thcRest);
+    return result;
+}
+
+HeightComp solveHeightComp() {
+    FlyBody b;
+    HeightComp hc;
+    const float eps = 0.01f;
+    for (int l = 0; l < kLegCount; ++l) {
+        const LegId id = static_cast<LegId>(l);
+        const float thc0 = b.angle(id, Joint::ThC);
+        const float ctr0 = b.angle(id, Joint::CTr);
+        b.setAngle(id, Joint::ThC, thc0 + eps);
+        const float zp = b.footPosition(id).z;
+        b.setAngle(id, Joint::ThC, thc0 - eps);
+        const float zm = b.footPosition(id).z;
+        b.setAngle(id, Joint::ThC, thc0);
+        b.setAngle(id, Joint::CTr, ctr0 + eps);
+        const float zp2 = b.footPosition(id).z;
+        b.setAngle(id, Joint::CTr, ctr0 - eps);
+        const float zm2 = b.footPosition(id).z;
+        b.setAngle(id, Joint::CTr, ctr0);
+        hc.dzdThC[l] = (zp - zm) / (2.0f * eps);
+        hc.dzdCTr[l] = (zp2 - zm2) / (2.0f * eps);
+        hc.ctrPerThC[l] = (std::fabs(hc.dzdCTr[l]) > 1e-6f)
+                              ? -hc.dzdThC[l] / hc.dzdCTr[l]
+                              : 0.0f;
+
+        const float restZ = b.footPosition(id).z;
+        for (int k = 0; k < kLevelSamples; ++k) {
+            const float thcOff =
+                kLevelSpan * (2.0f * k / (kLevelSamples - 1) - 1.0f);
+            hc.table[l][k] = solveCtrForHeight(b, id, restZ, thc0, ctr0,
+                                               thcOff,
+                                               hc.ctrPerThC[l] * thcOff);
+        }
+    }
+    return hc;
+}
+
+// Interpolate the exact correction, falling back to the linear coefficient
+// outside the tabulated range rather than clamping, so a large foot-placement
+// shift degrades smoothly instead of hitting a wall.
+float levelOffset(const HeightComp& hc, int leg, float thcOff) {
+    if (thcOff <= -kLevelSpan || thcOff >= kLevelSpan) {
+        return hc.ctrPerThC[leg] * thcOff;
+    }
+    const float u = (thcOff + kLevelSpan) / (2.0f * kLevelSpan) *
+                    (kLevelSamples - 1);
+    const int i0 = static_cast<int>(u);
+    const int i1 = std::min(i0 + 1, kLevelSamples - 1);
+    const float f = u - i0;
+    return hc.table[leg][i0] * (1.0f - f) + hc.table[leg][i1] * f;
+}
+
+int jacobianReport() {
+    const HeightComp hc = solveHeightComp();
+
+    // What each joint actually does to the foot, in millimetres per radian,
+    // at the pose the animal stands in. Written down because every joint in
+    // this model has been described by the name of the muscle that drives it
+    // -- ThC "takes the step", CTr "lifts" -- and those descriptions turn out
+    // to be claims about a neutral pose the fly is nowhere near.
+    {
+        FlyBody fb;
+        std::printf("=== foot motion per joint, mm/rad ===\n");
+        std::printf("%-10s %-6s %8s %8s %8s %8s\n", "leg", "joint",
+                    "dx", "dy", "dz", "|d|");
+        const float eps = 0.01f;
+        for (int l = 0; l < kLegCount; l += 2) {
+            const LegId id = static_cast<LegId>(l);
+            for (int j = 0; j < kJointCount; ++j) {
+                const Joint jt = static_cast<Joint>(j);
+                const float a0 = fb.angle(id, jt);
+                fb.setAngle(id, jt, a0 + eps);
+                const V3 pp = fb.footPosition(id);
+                fb.setAngle(id, jt, a0 - eps);
+                const V3 pm = fb.footPosition(id);
+                fb.setAngle(id, jt, a0);
+                const V3 d = (pp - pm) * (1.0f / (2.0f * eps));
+                std::printf("%-10s %-6s %8.3f %8.3f %8.3f %8.3f\n",
+                            legName(id), jointName(jt), d.x, d.y, d.z,
+                            std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
+            }
+        }
+        std::printf("\n");
+    }
+
+    std::printf("=== foot height sensitivity at the rest pose ===\n");
+    std::printf("%-10s %12s %12s %12s %10s %10s\n", "leg", "dz/dThC", "dz/dCTr", "CTr per ThC", "exact-0.4", "exact+0.4");
+    for (int l = 0; l < kLegCount; ++l) {
+        std::printf("%-10s %12.4f %12.4f %12.4f %10.4f %10.4f\n",
+                    legName(static_cast<LegId>(l)), hc.dzdThC[l],
+                    hc.dzdCTr[l], hc.ctrPerThC[l],
+                    levelOffset(hc, l, -0.4f), levelOffset(hc, l, 0.4f));
+    }
+    return 0;
+}
 GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose);
 
 // Run the same gait several times from slightly different starting states and
@@ -460,6 +642,8 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     if (g_friction > 0.0f) phys.world.params.friction = g_friction;
     if (g_inter >= 0) phys.world.params.interleave = (g_inter != 0);
 
+    const HeightComp hc = solveHeightComp();
+
     // Tripod A = front_L, middle_R, hind_L; tripod B is the other three.
     const bool tripodA[kLegCount] = {true, false, false, true, true, false};
 
@@ -474,7 +658,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
                     "t (ms)", "x (mm)", "height", "contacts", "pitch");
     }
 
-    const int n = static_cast<int>(2000.0f / 1000.0f / kDt);
+    const int n = static_cast<int>(gp.seconds / kDt);
     float worstPitch = 0.0f;
     float contactSum = 0.0f;
     // Fore-aft excursion of one foot relative to the body. This is the
@@ -485,6 +669,30 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     float footRelMin = 1e9f, footRelMax = -1e9f;
     // How much of that sweep happens while the foot is actually loaded.
     float stanceRelMin = 1e9f, stanceRelMax = -1e9f;
+
+    // Where the load sits fore and aft, against where the weight sits.
+    //
+    // A body pushed along by feet below its centre of mass takes a nose-up
+    // moment, and the only thing that cancels it is the support moving
+    // rearward so gravity pulls the nose back down. If the impulse-weighted
+    // centre of pressure sits *behind* the centre of mass instead, gravity
+    // adds to the nose-up moment rather than opposing it and the attitude has
+    // no equilibrium to return to. That is a geometry fault, not a gain
+    // fault, and no amount of postural feedback fixes it -- which is what the
+    // pgain sweep found.
+    constexpr int kBuckets = 12;
+    double copNum[kBuckets] = {}, copDen[kBuckets] = {};
+    double pitchSum[kBuckets] = {};
+    // Hop amplitude and vertical speed. A position servo driven at gait
+    // frequency adds energy every time its target jumps, and the signature
+    // is a vertical oscillation that grows bucket on bucket until the body
+    // leaves the floor. A trip, by contrast, shows no growth and then one
+    // bad bucket.
+    double hMin[kBuckets], hMax[kBuckets], vzSum[kBuckets] = {};
+
+    double loadPerLeg[kBuckets][kLegCount] = {};
+    int bucketN[kBuckets] = {};
+    for (int k = 0; k < kBuckets; ++k) { hMin[k] = 1e9; hMax[k] = -1e9; }
     for (int i = 0; i < n; ++i) {
         const float t = i * kDt * 1000.0f;
         const float phase = 6.2831853f * t / periodMs;
@@ -525,7 +733,14 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             const float tonicCTr = gp.forceMode ? -gp.tonic : 0.0f;
             const float tonicFTi = gp.forceMode ? gp.tonic : 0.0f;
             out[static_cast<int>(Joint::FTi)] = tonicFTi;
-            out[static_cast<int>(Joint::ThC)] = -amplitude * s - place;
+            const float thcOff = -amplitude * s - place;
+            out[static_cast<int>(Joint::ThC)] = thcOff;
+            // Hold the foot at the height the rest pose put it at, whatever
+            // ThC is doing. Applied in swing as well as stance: it is a
+            // correction to where the leg *would* be, so the deliberate swing
+            // arc adds on top of a level baseline rather than on top of a
+            // sawtooth.
+            const float level = gp.levelGain * levelOffset(hc, l, thcOff);
             // Lift only during swing, which is the half where the leg is
             // protracting. A leg that lifts during stance just drops the body.
             //
@@ -535,7 +750,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             // "lift the foot" drove every swing leg into the floor, so all six
             // feet stayed planted and the fly shuffled backwards.
             out[static_cast<int>(Joint::CTr)] =
-                tonicCTr + ((c > 0.0f) ? lift * c : 0.0f);
+                tonicCTr + level + ((c > 0.0f) ? lift * c : 0.0f);
             // Curl the tarsus during swing.
             //
             // A point foot can be planted and lifted straight up. A tarsus
@@ -603,6 +818,25 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             for (const bool d : legDown) if (d) contactSum += 1.0f;
         }
         {
+            const int bkt = std::min(kBuckets - 1, i * kBuckets / n);
+            const V3 com = phys.centreOfMass();
+            for (const auto& c : phys.world.contacts) {
+                const int l = phys.probeLeg(c.probe);
+                if (l < 0 || c.normalImpulse <= 0.0f) continue;
+                const RigidBody& b = phys.world.bodies[c.body];
+                const V3 w = b.position + b.orientation.rotate(c.localPoint);
+                copNum[bkt] += static_cast<double>(w.x - com.x) * c.normalImpulse;
+                copDen[bkt] += c.normalImpulse;
+                loadPerLeg[bkt][l] += c.normalImpulse;
+            }
+            pitchSum[bkt] += pitch;
+            const float h = phys.bodyHeight();
+            hMin[bkt] = std::min(hMin[bkt], static_cast<double>(h));
+            hMax[bkt] = std::max(hMax[bkt], static_cast<double>(h));
+            vzSum[bkt] += std::fabs(phys.thorax().velocity.z);
+            ++bucketN[bkt];
+        }
+        {
             const int probe = static_cast<int>(LegId::MiddleL);
             const V3 f = phys.footPosition(probe);
             const float rel = f.x - phys.thorax().position.x;
@@ -617,7 +851,29 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
             if (verbose) std::printf("DIVERGED at %.0f ms\n", t);
             return {};
         }
-        if (verbose && (i % (n / 10) == 0 || i == n - 1)) {
+        const bool inWindow = g_from >= 0.0f && t >= g_from * 1000.0f &&
+                              t <= g_to * 1000.0f;
+        if (verbose && inWindow) {
+            bool legDown[kLegCount] = {};
+            for (const auto& c : phys.world.contacts) {
+                const int l = phys.probeLeg(c.probe);
+                if (l >= 0) legDown[l] = true;
+            }
+            int down = 0;
+            for (const bool d : legDown) if (d) ++down;
+            int thx = 0, abd = 0, hd = 0;
+            for (const auto& c : phys.world.contacts) {
+                if (c.probe == phys.thoraxProbe()) ++thx;
+                else if (c.probe == phys.abdomenProbe()) ++abd;
+                else if (c.probe == phys.headProbe()) ++hd;
+            }
+            std::printf("W %8.1f h %7.4f pitch %7.2f vz %8.2f vx %8.2f legs %d anchor %7.4f  thx %d abd %d head %d\n",
+                        t, phys.bodyHeight(), pitch,
+                        phys.thorax().velocity.z, phys.thorax().velocity.x,
+                        down, phys.world.maxAnchorError(),
+                        thx, abd, hd);
+        }
+        if (verbose && !inWindow && (i % (n / 10) == 0 || i == n - 1)) {
             std::printf("%8.0f %10.4f %10.4f %9zu %9.2f\n",
                         t, phys.thorax().position.x - startX, phys.bodyHeight(),
                         phys.world.contacts.size(), pitch);
@@ -631,11 +887,30 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     // different things about what is limiting it. A fly that steps quickly
     // but travels little per step is scuffing, not walking.
     const float stepHz = 1000.0f / periodMs;
-    const float strideMm = (travel / 2.0f) / stepHz;
+    const float strideMm = (travel / gp.seconds) / stepHz;
     // Duty factor: the share of the cycle a leg spends on the ground. A real
     // fly walking fast is near 0.5; a fly with every foot down all the time
     // is dragging.
     const float meanFeet = contactSum / static_cast<float>(n);
+    if (verbose) {
+        std::printf("\n%6s %8s %9s %8s %8s   %s\n", "t (s)", "pitch",
+                    "CoP-CoM", "hop mm", "|vz|", "share of load: fL fR mL mR hL hR");
+        for (int k = 0; k < kBuckets; ++k) {
+            if (bucketN[k] == 0) continue;
+            const double tMid = gp.seconds * (k + 0.5) / kBuckets;
+            const double cop = (copDen[k] > 0.0) ? copNum[k] / copDen[k] : 0.0;
+            double tot = 0.0;
+            for (int l = 0; l < kLegCount; ++l) tot += loadPerLeg[k][l];
+            std::printf("%6.2f %8.2f %9.4f %8.4f %8.2f  ", tMid,
+                        pitchSum[k] / bucketN[k], cop, hMax[k] - hMin[k],
+                        vzSum[k] / bucketN[k]);
+            for (int l = 0; l < kLegCount; ++l) {
+                std::printf(" %4.2f", (tot > 0.0) ? loadPerLeg[k][l] / tot : 0.0);
+            }
+            std::printf("\n");
+        }
+        std::printf("\n");
+    }
     if (verbose) std::printf("foot sweep %.3f mm relative to body, of which "
                 "%.3f mm loaded\n", footRelMax - footRelMin,
                 (stanceRelMax > stanceRelMin) ? stanceRelMax - stanceRelMin : 0.0f);
@@ -658,7 +933,7 @@ GaitResult gaitTrial(const GaitParams& gp, float jitter, bool verbose) {
     }
 
     GaitResult out;
-    out.speed = travel / 2.0f;
+    out.speed = travel / gp.seconds;
     out.stride = strideMm;
     out.duty = meanFeet / 6.0f;
     out.pitch = worstPitch;
@@ -772,6 +1047,12 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--probe-drive") == 0) {
             g_probeDrive = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--from") == 0) {
+            g_from = std::stof(argv[i + 1]);
+        }
+        if (std::strcmp(argv[i], "--to") == 0) {
+            g_to = std::stof(argv[i + 1]);
+        }
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--stand-only") == 0) g_standOnly = true;
@@ -781,6 +1062,9 @@ int main(int argc, char** argv) {
         return traceOne(argv[2], drive);
     }
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--jacobian") == 0) {
+            return jacobianReport();
+        }
         if (std::strcmp(argv[i], "--foot") == 0) {
             return footReport((i + 1 < argc) ? std::atoi(argv[i + 1]) : 2);
         }
@@ -801,9 +1085,11 @@ int main(int argc, char** argv) {
                 else if (!std::strcmp(a, "--pgain")) gp.postureGain = std::stof(v);
                 else if (!std::strcmp(a, "--prate")) gp.postureRate = std::stof(v);
                 else if (!std::strcmp(a, "--step")) gp.stepGain = std::stof(v);
+                else if (!std::strcmp(a, "--level")) gp.levelGain = std::stof(v);
                 else if (!std::strcmp(a, "--trials")) gp.trials = std::atoi(v);
                 else if (!std::strcmp(a, "--jitter")) gp.jitter = std::stof(v);
                 else if (!std::strcmp(a, "--force")) gp.forceMode = true;
+                else if (!std::strcmp(a, "--seconds")) gp.seconds = std::stof(v);
                 else if (!std::strcmp(a, "--no-hill")) g_hill = 0;
                 else if (!std::strcmp(a, "--vmax")) g_hillVmax = std::stof(v);
                 else if (!std::strcmp(a, "--tonic")) gp.tonic = std::stof(v);

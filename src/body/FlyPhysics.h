@@ -257,6 +257,11 @@ public:
     float peakDrive() const { return peakDrive_; }
     // Total mass of every body, micrograms.
     float totalMass() const;
+    // Mass-weighted centre of the whole animal, world millimetres. The thorax
+    // is not it: the legs and abdomen carry enough mass to move it, and the
+    // fore-aft distance between this and the centre of pressure is what
+    // decides whether gravity is quietly pitching the body over.
+    V3 centreOfMass() const;
     bool airborne() const { return airborne_; }
 
     // Which probe index is which, so a contact can be named rather than
