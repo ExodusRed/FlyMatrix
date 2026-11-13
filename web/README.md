@@ -70,6 +70,18 @@ cmake --build build-web              # writes web/body/flybody.{js,wasm,data}
 Opening `index.html` straight from disk does not work: browsers block `fetch`
 and WebAssembly from `file://`.
 
+## Licences and attribution
+
+- **Data** (`data/*`): derived from the FlyEM Male CNS connectome v0.9, which
+  is licensed CC BY 4.0. [`DATA_NOTICE.txt`](DATA_NOTICE.txt) carries the
+  attribution, the licence link, the list of changes and the no-endorsement
+  statement that CC BY 4.0 requires; the page shows the same in its footer.
+  Keep both when redistributing.
+- **Compiled-in software**: Emscripten runtime and musl (MIT), LLVM libc++
+  (Apache-2.0 with LLVM exception), SDL 3 (zlib). Their licence texts are in
+  [`THIRD_PARTY_NOTICES.txt`](THIRD_PARTY_NOTICES.txt), served next to the
+  page and linked from its footer. Regenerate it if the toolchain changes.
+
 ## What changed in the C++ for this
 
 - `src/viz/GL.h`: under Emscripten the GL entry points come straight from

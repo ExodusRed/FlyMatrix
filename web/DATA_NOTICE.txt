@@ -1,0 +1,39 @@
+Data attribution and licence -- FlyMatrix for the web
+=====================================================
+
+The files web/data/brain.bin, web/data/drive.bin and web/data/motor_map.tsv
+(and the neuron positions and activity they produce in this viewer) are
+derived from the FlyEM Male CNS connectome:
+
+  Dataset   FlyEM Male CNS connectome, release v0.9 (male-cns:v0.9, 2025-10-03)
+  Creators  FlyEM, HHMI Janelia Research Campus, in collaboration with the
+            University of Cambridge, the MRC Laboratory of Molecular Biology
+            and Google Research
+  Source    https://male-cns.janelia.org/
+  Licence   Creative Commons Attribution 4.0 International (CC BY 4.0)
+            https://creativecommons.org/licenses/by/4.0/
+
+  Paper     Berg, S., Beckett, I. R., Costa, M., et al. (2026). Sexual dimorphism
+            in the complete Drosophila male central nervous system connectome.
+            Cell. https://doi.org/10.1016/j.cell.2026.08.015
+            Preprint: https://doi.org/10.1101/2025.10.09.680999
+
+Changes made (as required by CC BY 4.0, section 3(a)(1)(B)):
+
+  - Neuron positions are quantised to 16 bits across the dataset's bounding box.
+  - The neuron activity shown is NOT data from the dataset. It is the output of
+    FlyMatrix's own leaky integrate-and-fire simulation, run on the dataset's
+    connectivity (synapse counts and predicted neurotransmitters) with the
+    giant fibre (bodyId 10001, DNp01) stimulated for 15 ms.
+  - drive.bin holds muscle activations computed by FlyMatrix from that
+    simulation; motor_map.tsv maps motor neurons to leg joints using the
+    dataset's cell-type names and soma neuromere/side annotations.
+  - Only connections of at least 2 synapses were used.
+
+FlyMatrix is an independent project. It is not affiliated with, sponsored by
+or endorsed by HHMI, Janelia Research Campus, the FlyEM project or any of its
+collaborators. The dataset's creators provide it as-is and make no
+representations about this derived work.
+
+The FlyMatrix data files may be redistributed under the same CC BY 4.0 terms,
+keeping this notice.

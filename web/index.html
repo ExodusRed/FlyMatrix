@@ -52,6 +52,8 @@
     details.about summary { cursor: pointer; color: var(--fg); }
     details.about p { max-width: 80ch; margin: 8px 0; }
     details.about a { color: var(--accent); }
+    footer.credits { border-top: 1px solid var(--border); padding: 8px 16px; font-size: 0.75rem; color: var(--muted); line-height: 1.45; }
+    footer.credits a { color: #b9b9c2; }
     @media (max-width: 640px) { header .sub, .controls .hint { display: none; } }
   </style>
 </head>
@@ -114,7 +116,7 @@
     <summary>What am I looking at?</summary>
     <p>
       <b>Brain:</b> every one of the 176,571 neurons of an adult male <i>Drosophila</i>, at its real position in the
-      <a href="https://www.janelia.org/project-team/flyem" target="_blank" rel="noopener">Janelia male-cns connectome</a>
+      <a href="https://male-cns.janelia.org/" target="_blank" rel="noopener">FlyEM male CNS connectome</a> (release v0.9)
       (~15 million connections). A leaky integrate-and-fire model was run on it with the giant fibre (DNp01, the
       escape neuron) stimulated for 15 ms. The full network needs far more memory than a web page can use, so this is a
       <b>recording</b> of that native run, replayed frame by frame with the same rendering as the desktop viewer.
@@ -134,6 +136,16 @@
       joint solver during the jump, which makes it an honest open problem of this model rather than a property of the fly.
     </p>
   </details>
+
+  <footer class="credits">
+    Connectome data: <a href="https://male-cns.janelia.org/" target="_blank" rel="noopener">FlyEM Male CNS v0.9</a>,
+    HHMI Janelia Research Campus with Univ. of Cambridge, MRC LMB and Google Research
+    (<a href="https://doi.org/10.1016/j.cell.2026.08.015" target="_blank" rel="noopener">Berg et al., Cell 2026</a>),
+    licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.
+    Modified: positions quantised; activity is FlyMatrix's own simulation, not recorded data.
+    Not affiliated with or endorsed by Janelia/HHMI.
+    · <a href="DATA_NOTICE.txt">Data notice</a> · <a href="THIRD_PARTY_NOTICES.txt">Third-party licences</a>
+  </footer>
 
   <script type="module">
     import { parseBrain, BrainViewer } from './brain.js';
