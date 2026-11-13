@@ -25,6 +25,7 @@ add_library(flycore STATIC
   src/core/DataPath.cpp
   src/core/NeuronNames.cpp
   src/body/FlyBody.cpp
+  src/body/FlyModel.cpp
   src/body/FlyPhysics.cpp
   src/body/MotorPools.cpp
   src/body/SensoryOrgans.cpp
@@ -74,6 +75,7 @@ if(EMSCRIPTEN)
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
     "--preload-file=${FLY_WEB_DATA}/drive.bin@/data/drive.bin"
     "--preload-file=${FLY_WEB_DATA}/motor_map.tsv@/data/motor_map.tsv"
+    "--preload-file=${FLY_WEB_DATA}/flymodel.bin@/data/flymodel.bin"
   )
   return()
 endif()

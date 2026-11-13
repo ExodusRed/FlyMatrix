@@ -1193,3 +1193,70 @@ uses and is the next thing to tune. Worst ankle error rose from 0.069 to
 - Carry v2 into the physics skeleton (3-DOF coxa there needs a new joint type,
   a re-solved rest pose and a re-checked jump and walk).
 - Head and abdomen articulation.
+
+---
+
+## 15. The walker gets a real fly's body
+
+Section 14's estimated anatomy still looked like a fly built from spheres,
+and it was: ellipsoids, cylinders and estimated proportions. The projects
+that look right (NeuroMechFly, flybody) use meshes from micro-CT scans. With
+the decision to use open assets with attribution, the kinematic walker now
+uses the **flybody** model (Vaxenburg, Siwanowicz, Merel et al., Nature 2025;
+Google DeepMind and HHMI Janelia; Apache-2.0).
+
+`tools/flymodel/import_flybody.mjs` converts it: cm to mm, meshes baked into
+their bodies' frames, 272,550 triangles simplified to 24,968, quantised --
+0.28 MB for 67 bodies, 102 hinge joints and 85 meshes. Attribution, licence
+text and the list of changes are in `tools/flymodel/NOTICE.txt` and served in
+`web/THIRD_PARTY_NOTICES.txt`.
+
+### What the measured skeleton showed about the estimates
+
+```
+                      section 14 estimate     flybody (measured)
+femur, middle leg     0.54 mm                 0.85 mm
+tibia, middle leg     0.52 mm                 0.69 mm
+thorax width          0.66 mm                 0.88 mm
+standing height       0.60 mm                 1.22 mm (thorax centre)
+coxa bases            ventral, near midline   ventral, y = 0.19-0.24 mm  (confirmed)
+L/r                   1.46                    1.11  (real flies 1-2)
+```
+
+The review in section 14 had the *directions* right -- ventral coxae, longer
+legs than v1 -- and the *magnitudes* wrong. The legs are a third longer than
+estimated and the fly stands twice as tall.
+
+### Walking on it
+
+Each leg drives flybody's seven actuated joints (coxa abduct, twist and swing;
+femur twist and swing; tibia; tarsus) with four passive tarsal joints. The
+model's zero pose is a natural standing pose and is the rest pose: all six
+claws are level to 0.0001 mm. Wings start at their spring rest angles, which
+folds them over the abdomen. The step planner is unchanged.
+
+```
+              speed      steps    tripod   foot error, stance / any
+fast          18.0 mm/s  15.6 Hz  100%     0.031 / 0.270 mm
+medium         9.0       10.1     100%     0.038 / 0.237
+slow           3.6        5.0     100%     0.033 / 0.228
+turns         10.8 +/-71 deg/s     76%     0.026-0.042 / 0.26
+```
+
+Planted feet stay within 0.03-0.04 mm, about 1.5% of a leg: no visible
+sliding. The large "any" figure is swing only -- the claw does not reach the
+full 0.28 mm lift within the joint limits, which costs clearance and nothing
+else. It was traced by elimination: independent of IK iterations (4, 12 and 30
+give 0.237 mm), proportional to lift height (0.042 mm with no lift).
+
+Joint use: front and hind legs step at the femur-tibia joint (0.87 and 0.83
+rad), middle legs spread motion over coxa twist, femur twist and tibia, and
+coxa abduction is almost unused (0.03-0.09 rad).
+
+### Still open
+
+- The physics skeleton and the Physics/Jump modes still use the old body.
+- Swing trajectories are ours and simple; real swing paths could be matched
+  to published kinematics.
+- No shadows, so the fly still floats visually; head, antennae and abdomen
+  are posed but never move.

@@ -1,0 +1,33 @@
+Fruit fly body model -- attribution and changes
+================================================
+
+web/data/flymodel.bin is derived from the flybody fruit fly model:
+
+  Source    https://github.com/TuragaLab/flybody  (flybody/fruitfly/assets:
+            fruitfly.xml and the .obj meshes)
+  Creators  Google DeepMind and HHMI Janelia Research Campus
+  Licence   Apache License 2.0 (full text in tools/flymodel/LICENSE-flybody
+            and in web/THIRD_PARTY_NOTICES.txt)
+  Paper     Vaxenburg, R., Siwanowicz, I., Merel, J., Robie, A. A., Morrow, C.,
+            Novati, G., Stefanidi, Z., Both, G.-J., Card, G. M., Reiser, M. B.,
+            Botvinick, M. M., Branson, K. M., Tassa, Y. and Turaga, S. C.
+            "Whole-body physics simulation of fruit fly locomotion".
+            Nature 643, 1312-1320 (2025). doi:10.1038/s41586-025-09029-4
+
+Changes made by FlyMatrix (Apache-2.0, section 4(b)), by
+tools/flymodel/import_flybody.mjs:
+
+  - Units converted from centimetres to millimetres.
+  - Each mesh baked into its body's frame (geom position/orientation and the
+    mesh scale applied to the vertices).
+  - Meshes welded and simplified with meshoptimizer from 272,550 to about
+    25,000 triangles, then quantised (16-bit positions, 8-bit normals).
+  - Only the kinematic tree (bodies, hinge joints with axis, range and spring
+    rest angle) and the visual meshes are kept. Collision geometry, actuators,
+    sites, tendons, contact settings and all physical properties (masses,
+    inertias, fluid and adhesion models) are dropped.
+
+How FlyMatrix uses it: the kinematic walker (src/kin/KinematicFly) poses the
+model's skeleton with FlyMatrix's own walking controller and draws its
+meshes. The walking behaviour is FlyMatrix's, not flybody's; flybody's own
+controllers (trained by reinforcement learning) are not used.

@@ -30,6 +30,7 @@
 
 #include "body/Anatomy.h"
 #include "body/FlyBody.h"
+#include "body/FlyModel.h"
 #include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
 #include "body/WalkController.h"
@@ -206,7 +207,40 @@ struct App {
     // Neither walking rhythm is the connectome; see WalkController.h.
     enum class Mode { Walk, PhysWalk, Jump };
     Mode mode = Mode::Walk;
-    kin::KinematicFly kin;
+    // The flybody model (Vaxenburg, Siwanowicz, Merel et al., Nature 2025;
+    // Apache-2.0; see tools/flymodel/NOTICE.txt), drives Walk mode's body
+    // and is drawn with its own meshes. Declared before `kin`, which uses it.
+    FlyModel flyModel = FlyModel::load("/data/flymodel.bin");
+    kin::KinematicFly kin{flyModel};
+    struct ModelPart {
+        Mesh mesh;
+        int body = -1;
+        V3 colour;
+        float alpha = 1.0f;
+        int leg = -1;  // which leg this part belongs to, for the swing glow
+    };
+    std::vector<ModelPart> modelParts;
+    std::vector<Transform> bodyWorld;
+
+    // Upload the model's meshes. Needs a GL context.
+    void uploadModel() {
+        for (const auto& md : flyModel.meshes()) {
+            std::vector<Mesh::Vertex> verts(md.positions.size());
+            for (std::size_t i = 0; i < verts.size(); ++i) verts[i] = {md.positions[i], md.normals[i]};
+            ModelPart part;
+            part.mesh = Mesh::fromData(std::move(verts), md.indices);
+            part.mesh.upload();
+            part.body = md.body;
+            const auto& c = flyModel.materials()[static_cast<std::size_t>(md.material)];
+            part.colour = {c[0], c[1], c[2]};
+            part.alpha = c[3];
+            // Walk up the tree to see whether this body is part of a leg.
+            for (int b = md.body; b >= 0 && part.leg < 0; b = flyModel.bodies()[static_cast<std::size_t>(b)].parent) {
+                part.leg = kin.legOfBody(b);
+            }
+            modelParts.push_back(std::move(part));
+        }
+    }
     float kinTimeScale = 0.25f;   // fraction of real time the kinematic fly runs at
     double lastNow = 0.0;
     float kinCarry = 0.0f;
@@ -229,7 +263,7 @@ struct App {
         resetBody();
         cam.zUp = true;
         cam.target = {-0.1f, 0, 0.45f};
-        cam.distance = 4.2f;  // starts in Walk mode
+        cam.distance = 7.5f;  // starts in Walk mode, with the full-size flybody model
         cam.pitch = -0.32f;
         cam.yaw = 0.8f;
     }
@@ -269,7 +303,7 @@ struct App {
         resetBody();
         // Walking is about the legs: frame the fly closer than for the jump,
         // which needs room above it.
-        cam.distance = m == Mode::Jump ? 7.0f : 4.2f;
+        cam.distance = m == Mode::Jump ? 7.0f : m == Mode::Walk ? 7.5f : 4.2f;
     }
 
     float heading() const {
@@ -330,7 +364,6 @@ struct App {
             }
         }
         body.root = kin.root();
-        kin.segments(segments);
         // Follow closely: the kinematic fly is fast enough to walk out of shot
         // with the gentler easing the physics modes use.
         const V3 want{body.root.position.x, body.root.position.y, cam.target.z};
@@ -494,6 +527,29 @@ struct App {
                 drawPart({{0, g, ap.groundZ + 0.001f}, Quat{}, 1.0f},
                          {ap.arenaHalfX, t, 0.004f}, {0.30f, 0.33f, 0.38f}, 0.0f, cube);
             }
+        }
+
+        // Walk mode draws the flybody model's meshes, posed by the walker.
+        if (mode == Mode::Walk) {
+            flyModel.pose(kin.root(), kin.jointAngles(), bodyWorld);
+            // Opaque parts first, then the translucent wing membranes with
+            // depth writes off so they blend over what is behind them.
+            for (int pass = 0; pass < 2; ++pass) {
+                if (pass == 1) {
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    glDepthMask(GL_FALSE);
+                }
+                for (const auto& part : modelParts) {
+                    if ((part.alpha < 0.99f) != (pass == 1)) continue;
+                    const float glow = part.leg >= 0 && kin.swinging(part.leg) ? 0.35f : 0.0f;
+                    drawMesh(bodyWorld[static_cast<std::size_t>(part.body)], {1, 1, 1}, part.colour, glow,
+                             part.alpha, part.mesh);
+                }
+            }
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+            return;
         }
 
         const Quat& bq = body.root.rotation;
@@ -712,6 +768,7 @@ int main() {
         app.cyl.upload();
         app.sph.upload();
         app.cube.upload();
+        app.uploadModel();
         app.uViewProj = gl::glGetUniformLocation(app.prog, "uViewProj");
         app.uModel = gl::glGetUniformLocation(app.prog, "uModel");
         app.uNormalMat = gl::glGetUniformLocation(app.prog, "uNormalMat");

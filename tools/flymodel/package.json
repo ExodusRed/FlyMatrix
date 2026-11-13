@@ -1,0 +1,12 @@
+{
+  "name": "flymodel-import",
+  "private": true,
+  "type": "module",
+  "description": "Converts the flybody fruit fly model (Apache-2.0) into FlyMatrix's compact web format",
+  "scripts": {
+    "import": "node import_flybody.mjs"
+  },
+  "dependencies": {
+    "meshoptimizer": "0.21.0"
+  }
+}

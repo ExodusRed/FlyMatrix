@@ -13,9 +13,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 
 #include "kin/KinematicFly.h"
+#include "body/FlyModel.h"
 #include <vector>
 
 using namespace fly;
@@ -23,8 +25,18 @@ using namespace fly::kin;
 
 namespace {
 
+// The flybody model, loaded once. Run flykin from the FlyMatrix directory, or
+// set FLYMODEL to the file.
+const FlyModel& model() {
+    static const FlyModel m = [] {
+        const char* env = std::getenv("FLYMODEL");
+        return FlyModel::load(env ? env : "web/data/flymodel.bin");
+    }();
+    return m;
+}
+
 struct Stats {
-    float speed = 0, yawRate = 0, stepHz = 0, worstIk = 0;
+    float speed = 0, yawRate = 0, stepHz = 0, worstIk = 0, worstStance = 0;
     std::array<float, 3> duty{};                 // per leg pair
     std::array<float, 4> swingHist{};            // fraction of time with 0,1,2,3 legs swinging
     std::array<std::array<float, KinematicFly::DofCount>, 3> range{};  // joint range used, per pair
@@ -32,7 +44,10 @@ struct Stats {
 };
 
 Stats run(float seconds, float speed, float turn, bool timeline) {
-    KinematicFly fly;
+    KinematicFly fly(model());
+    // Experiment overrides, e.g. KIN_ITERS=12 KIN_LIFT=0.2 flykin
+    if (const char* v = std::getenv("KIN_ITERS")) fly.params.ikIterations = std::atoi(v);
+    if (const char* v = std::getenv("KIN_LIFT")) fly.params.liftHeight = static_cast<float>(std::atof(v));
     const float dt = 0.001f;
     const KinematicFly::Command cmd{speed, turn};
     const int n = static_cast<int>(seconds / dt);
@@ -55,7 +70,7 @@ Stats run(float seconds, float speed, float turn, bool timeline) {
         int swinging = 0;
         for (int l = 0; l < kLegCount; ++l) {
             if (fly.swinging(l)) ++swinging; else ++stanceTicks[l];
-            const auto& q = fly.angles(l);
+            const auto q = fly.legAngles(l);
             for (int d = 0; d < KinematicFly::DofCount; ++d) {
                 lo[l][d] = std::min(lo[l][d], q[d]);
                 hi[l][d] = std::max(hi[l][d], q[d]);
@@ -70,6 +85,7 @@ Stats run(float seconds, float speed, float turn, bool timeline) {
             if (a || b) ++tripods;
         }
         st.worstIk = std::max(st.worstIk, fly.worstFootError());
+        st.worstStance = std::max(st.worstStance, fly.worstStanceError());
         if (timeline && i >= warm && i < warm + 400 && i % 4 == 0) {
             for (int l = 0; l < kLegCount; ++l) lines[l] += fly.swinging(l) ? '^' : '_';
         }
@@ -99,12 +115,12 @@ Stats run(float seconds, float speed, float turn, bool timeline) {
 void report(const char* name, float seconds, float speed, float turn, bool timeline) {
     const Stats s = run(seconds, speed, turn, timeline);
     std::printf("%-14s speed %5.1f mm/s  yaw %+6.1f deg/s  steps %4.1f Hz  duty F/M/H %.2f %.2f %.2f  "
-                "swinging 0/1/2/3: %2.0f/%2.0f/%2.0f/%2.0f%%  tripod %3.0f%%  worst foot error %.3f mm\n",
+                "swinging 0/1/2/3: %2.0f/%2.0f/%2.0f/%2.0f%%  tripod %3.0f%%  foot error stance %.3f / any %.3f mm\n",
                 name, s.speed, s.yawRate, s.stepHz, s.duty[0], s.duty[1], s.duty[2],
                 100 * s.swingHist[0], 100 * s.swingHist[1], 100 * s.swingHist[2], 100 * s.swingHist[3],
-                100 * s.tripodShare, s.worstIk);
+                100 * s.tripodShare, s.worstStance, s.worstIk);
     if (timeline) {
-        static const char* dof[KinematicFly::DofCount] = {"ThCpro", "ThCabd", "ThCrot", "CTr", "TrF", "FTi", "TiTa"};
+        static const char* dof[KinematicFly::DofCount] = {"CxAbd", "CxTwist", "Coxa", "FeTwist", "Femur", "Tibia", "Tarsus"};
         static const char* pair[3] = {"front ", "middle", "hind  "};
         std::printf("\njoint range used (radians), per leg pair:\n        ");
         for (const char* d : dof) std::printf("%8s", d);
@@ -145,32 +161,52 @@ void printPose() {
     std::printf("\nfront-to-hind foot spread 2L = %.3f mm, thorax height r = %.3f mm, L/r = %.2f\n",
                 ff.x - hf.x, body.root.position.z, 0.5f * (ff.x - hf.x) / body.root.position.z);
 
-    // The kinematic model's anatomy v2, for comparison.
-    KinematicFly kin;
-    std::printf("\n=== anatomy v2 (kinematic model) ===\n");
+    // The kinematic walker on the flybody model, for comparison.
+    KinematicFly kin(model());
+    std::printf("\n=== flybody model (kinematic walker) ===\n");
     std::printf("thorax centre height %.3f mm, rest pose fit error %.4f mm\n\n", kin.standHeight(), kin.restError());
-    std::printf("%-9s %22s %22s %8s\n", "leg", "coxa attach (x,y,z)", "neutral foot (x,y,z)", "length");
     for (int l = 0; l < kLegCount; ++l) {
-        const auto g = kin.geometry(l);
-        float len = 0;
-        for (float s : g.lengths) len += s;
-        std::printf("%-9s (%6.3f,%6.3f,%6.3f) (%6.3f,%6.3f,%6.3f) %8.3f\n", legName(static_cast<LegId>(l)),
-                    g.attach.x, g.attach.y, g.attach.z, g.neutralFoot.x, g.neutralFoot.y, g.neutralFoot.z, len);
+        const V3 f = kin.neutralFoot(l);
+        std::printf("%-9s neutral claw (%6.3f,%6.3f,%6.3f)\n", legName(static_cast<LegId>(l)), f.x, f.y, f.z);
     }
-    std::printf("\nrest angles (rad): ThCpro ThCabd ThCrot CTr TrF FTi | TiTa\n");
-    for (int l = 0; l < kLegCount; l += 2) {
-        const auto& q = kin.angles(l);
-        std::printf("  %-8s", legName(static_cast<LegId>(l)));
-        for (float a : q) std::printf(" %6.3f", a);
-        std::printf("\n");
-    }
-    const auto gf = kin.geometry(0), gh = kin.geometry(4);
-    const float L = 0.5f * (gf.neutralFoot.x - gh.neutralFoot.x);
+    const float L = 0.5f * (kin.neutralFoot(0).x - kin.neutralFoot(4).x);
     std::printf("\nfront-to-hind foot spread 2L = %.3f mm, L/r = %.2f (real flies 1-2)\n", 2 * L,
                 L / kin.standHeight());
 }
 
+// The flybody model's zero pose, to see how it stands before any IK.
+void printModel(const char* path) {
+    const FlyModel m = FlyModel::load(path);
+    std::vector<float> q(m.joints().size(), 0.0f);
+    std::vector<Transform> w;
+    m.pose(Transform{}, q, w);
+    std::printf("%zu bodies, %zu joints, %zu meshes\n\n", m.bodies().size(), m.joints().size(), m.meshes().size());
+    for (std::size_t i = 0; i < m.bodies().size(); ++i) {
+        const auto& b = m.bodies()[i];
+        const std::string& n = b.name;
+        const bool interesting = n == "thorax" || n == "head" || n == "abdomen" || n.find("coxa") == 0 ||
+                                 n.find("tarsus_T") == 0 || n.find("claw") == 0 || n.find("wing") == 0 ||
+                                 n.find("femur") == 0 || n.find("tibia") == 0;
+        if (!interesting) continue;
+        std::printf("%-20s world (%7.3f %7.3f %7.3f)", n.c_str(), w[i].position.x, w[i].position.y, w[i].position.z);
+        for (int j : b.joints) {
+            const auto& jt = m.joints()[static_cast<std::size_t>(j)];
+            std::printf("  [%s %.2f..%.2f]", jt.name.c_str(), jt.lo, jt.hi);
+        }
+        std::printf("\n");
+    }
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--model") {
+        try {
+            printModel(argv[2]);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "error: %s\n", e.what());
+            return 1;
+        }
+        return 0;
+    }
     if (argc >= 2 && std::string(argv[1]) == "--pose") {
         printPose();
         return 0;

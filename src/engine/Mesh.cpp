@@ -1,3 +1,4 @@
+#include <utility>
 #include "Mesh.h"
 
 #include <cmath>
@@ -96,6 +97,13 @@ Mesh Mesh::sphere(int rings, int sectors) {
             m.indices_.insert(m.indices_.end(), {a, b, a + 1, a + 1, b, b + 1});
         }
     }
+    return m;
+}
+
+Mesh Mesh::fromData(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices) {
+    Mesh m;
+    m.vertices_ = std::move(vertices);
+    m.indices_ = std::move(indices);
     return m;
 }
 

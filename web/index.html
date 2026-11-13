@@ -155,11 +155,14 @@
     </p>
     <p>
       <b>Walk</b> (the default) is a <b>kinematic</b> fly: no forces, just natural-looking movement that runs in real time.
+      Its body is the <a href="https://github.com/TuragaLab/flybody" target="_blank" rel="noopener">flybody</a> model by
+      Google DeepMind and HHMI Janelia: measured skeleton, joint axes and ranges, and 3D meshes of every body part, here
+      simplified to a tenth of their triangles. How it walks is FlyMatrix's own controller.
       Each leg has its own swing/stance controller; feet stay planted while the body moves over them; a leg lifts when
       its foot falls behind its reach, and local rules between neighbouring legs (don't lift while a neighbour swings,
       lift sooner after a neighbour lands) let the gait <i>emerge</i>: a tripod when fast, more legs on the ground when
-      slow, as in real flies. Inverse kinematics moves all leg joints, including a three-axis coxa, the way the leg pairs
-      of real flies do: front and hind legs mostly bend the knee, middle legs rotate the coxa and femur. These ideas are
+      slow, as in real flies. Inverse kinematics moves all seven joints of each leg, including a three-axis coxa, the way the leg pairs
+      of real flies do: front and hind legs mostly bend at the femur-tibia joint, middle legs rotate the coxa and femur. These ideas are
       inspired by published work on insect walking (Walknet; DeAngelis et al. 2019; Karashchuk et al. 2021), not copied
       from it.
     </p>
@@ -184,6 +187,9 @@
     licensed <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>.
     Modified: positions quantised; activity is FlyMatrix's own simulation, not recorded data.
     Not affiliated with or endorsed by Janelia/HHMI.
+    Walking fly body: the <a href="https://github.com/TuragaLab/flybody" target="_blank" rel="noopener">flybody</a>
+    model by Google DeepMind and HHMI Janelia (<a href="https://doi.org/10.1038/s41586-025-09029-4" target="_blank" rel="noopener">Vaxenburg et al., Nature 2025</a>),
+    Apache-2.0, simplified for the web; the walking controller is FlyMatrix's own.
     · <a href="DATA_NOTICE.txt">Data notice</a> · <a href="THIRD_PARTY_NOTICES.txt">Third-party licences</a>
   </footer>
 

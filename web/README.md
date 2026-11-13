@@ -55,6 +55,12 @@ responsive.
 
 ## Walking
 
+The walking fly's body is the flybody model (Google DeepMind and HHMI Janelia,
+Apache-2.0), converted by `tools/flymodel/import_flybody.mjs` into
+`data/flymodel.bin` -- see `tools/flymodel/NOTICE.txt`. To rebuild it, put
+flybody's `fruitfly.xml` and meshes in a folder (`obj/` for the meshes) and run
+`node tools/flymodel/import_flybody.mjs <folder> web/data/flymodel.bin`.
+
 The Body tab has two walkers. **Walk** (the default) is `kin::KinematicFly`:
 no physics, per-leg swing/stance controllers with Walknet-style coordination
 rules, foot placement and inverse kinematics over a 3-DOF coxa and the four

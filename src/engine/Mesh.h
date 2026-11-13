@@ -28,6 +28,8 @@ public:
     // A unit cube spanning -1..+1 on each axis, with outward normals. Scaled
     // by the model matrix into the arena's floor slab and glass walls.
     static Mesh box();
+    // Arbitrary geometry, e.g. a loaded model part (see body/FlyModel.h).
+    static Mesh fromData(std::vector<Vertex> vertices, std::vector<std::uint32_t> indices);
 
     // Upload to the GPU. Requires a current GL context and fly::gl::load().
     void upload();
