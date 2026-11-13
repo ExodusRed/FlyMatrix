@@ -33,6 +33,7 @@
 #include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
 #include "body/WalkController.h"
+#include "kin/KinematicFly.h"
 #include "engine/Math.h"
 #include "engine/Mesh.h"
 #include "viz/Camera.h"
@@ -196,11 +197,19 @@ struct App {
     bool dragL = false, dragR = false;
     int canvasW = 0, canvasH = 0;
 
-    // Two modes. Jump replays the recorded giant-fibre drive into the
-    // physics. Walk runs the WalkController (a modelled pattern generator,
-    // not the connectome -- see WalkController.h) live, steered by the user.
-    enum class Mode { Walk, Jump };
+    // Three modes.
+    //  Walk:     the kinematic walker (kin::KinematicFly) -- no physics, natural
+    //            leg movement, real time. Variant B2 in docs/findings.md 13.
+    //  PhysWalk: the physics body driven by the WalkController pattern
+    //            generator -- the starting point for the physical variant B1.
+    //  Jump:     the recorded giant-fibre drive replayed into the physics.
+    // Neither walking rhythm is the connectome; see WalkController.h.
+    enum class Mode { Walk, PhysWalk, Jump };
     Mode mode = Mode::Walk;
+    kin::KinematicFly kin;
+    float kinTimeScale = 0.25f;   // fraction of real time the kinematic fly runs at
+    double lastNow = 0.0;
+    float kinCarry = 0.0f;
     WalkController cpg;
     WalkController::Command walkCmd{1.0f, 0.0f};  // from the page's controls
     float keyTurn = 0.0f;                         // from held arrow / A-D keys
@@ -220,7 +229,7 @@ struct App {
         resetBody();
         cam.zUp = true;
         cam.target = {-0.1f, 0, 0.45f};
-        cam.distance = 7.0f;
+        cam.distance = 4.2f;  // starts in Walk mode
         cam.pitch = -0.32f;
         cam.yaw = 0.8f;
     }
@@ -229,13 +238,13 @@ struct App {
     // cut short, floor on, standard gravity.
     void resetBody() {
         body.resetPose();
-        const bool walk = mode == Mode::Walk;
+        const bool walk = mode == Mode::PhysWalk;
         phys.params.useManualTarget = walk;
         for (auto& leg : phys.params.manualTarget) for (float& t : leg) t = 0.0f;
         phys.build(body);
         // A big floor for walking (the fly is recentred long before it could
         // reach the edge, see recentre()); the usual 6 mm box for the jump.
-        const float half = walk ? 30.0f : 6.0f;
+        const float half = mode == Mode::Jump ? 6.0f : 30.0f;
         phys.world.params.arenaHalfX = half;
         phys.world.params.arenaHalfY = half;
         phys.world.params.arenaHeight = 7.2f;
@@ -250,11 +259,17 @@ struct App {
         measuredSpeed = 0.0f;
         lastPos = phys.thorax().position;
         cam.target = {lastPos.x - 0.1f, lastPos.y, 0.45f};
+        kin.reset();
+        kinCarry = 0.0f;
+        lastNow = emscripten_get_now();
     }
 
     void setMode(Mode m) {
         mode = m;
         resetBody();
+        // Walking is about the legs: frame the fly closer than for the jump,
+        // which needs room above it.
+        cam.distance = m == Mode::Jump ? 7.0f : 4.2f;
     }
 
     float heading() const {
@@ -290,8 +305,40 @@ struct App {
         recentre();
     }
 
+    // The kinematic fly runs against the clock: kinTimeScale of real time,
+    // in 1 ms steps. It is cheap enough that this is never the bottleneck.
+    void kinFrame() {
+        const double now = emscripten_get_now();
+        const float realDt = static_cast<float>(std::clamp((now - lastNow) / 1000.0, 0.0, 0.1));
+        lastNow = now;
+        if (!paused) {
+            kinCarry += realDt * kinTimeScale / 0.001f;
+            kin::KinematicFly::Command cmd{walkCmd.speed, std::clamp(walkCmd.turn + keyTurn, -1.0f, 1.0f)};
+            int n = 0;
+            while (kinCarry >= 1.0f && n++ < 200) {
+                kin.step(0.001f, cmd);
+                kinCarry -= 1.0f;
+                ++step;
+            }
+            kinCarry = std::min(kinCarry, 1.0f);
+            // Endless floor, as for the physics walk: shift by whole grid squares.
+            const V3 p = kin.root().position;
+            if (std::fabs(p.x) > 10.0f || std::fabs(p.y) > 10.0f) {
+                const V3 shift{-std::round(p.x), -std::round(p.y), 0.0f};
+                kin.translate(shift);
+                cam.target = cam.target + shift;
+            }
+        }
+        body.root = kin.root();
+        kin.segments(segments);
+        // Follow closely: the kinematic fly is fast enough to walk out of shot
+        // with the gentler easing the physics modes use.
+        const V3 want{body.root.position.x, body.root.position.y, cam.target.z};
+        cam.target = cam.target + (want - cam.target) * 0.3f;
+    }
+
     void physicsStep() {
-        if (mode == Mode::Walk) {
+        if (mode == Mode::PhysWalk) {
             walkStep();
             return;
         }
@@ -370,6 +417,11 @@ struct App {
         while (SDL_PollEvent(&ev)) handle(ev);
         syncCanvasSize();
 
+        if (mode == Mode::Walk) {
+            kinFrame();
+            draw();
+            return;
+        }
         if (!paused) {
             // The solver is expensive (natively too: ~0.1 s of CPU per
             // simulated millisecond with the network). Spend at most ~20 ms a
@@ -386,7 +438,7 @@ struct App {
         phys.readPose(segments);
         body.root.position = phys.thorax().position;
         body.root.rotation = phys.thorax().orientation;
-        if (mode == Mode::Walk) {
+        if (mode == Mode::PhysWalk) {
             // Follow the fly, eased so the camera does not inherit the bounce
             // of every step; only the horizontal position is followed.
             const V3 want{body.root.position.x, body.root.position.y, cam.target.z};
@@ -487,8 +539,8 @@ struct App {
             // Jump: glow with muscle activation. Walk: legs in swing glow, so
             // the alternating tripod is visible at a glance.
             const int legIdx = static_cast<int>(seg.leg);
-            const float glow = mode == Mode::Walk
-                ? (cpg.swinging(legIdx) ? 0.45f : 0.0f)
+            const float glow = mode == Mode::Walk ? (kin.swinging(legIdx) ? 0.45f : 0.0f)
+                : mode == Mode::PhysWalk ? (cpg.swinging(legIdx) ? 0.45f : 0.0f)
                 : pools.peakActivation(legIdx, static_cast<int>(seg.joint));
             drawPart({seg.a, aimDownZ(delta), 1.0f}, {seg.radius, seg.radius, len},
                      {0.55f, 0.45f, 0.32f}, glow, cyl);
@@ -555,14 +607,16 @@ struct App {
                       "{\"mode\":\"%s\",\"t\":%d,\"height\":%.4f,\"peak\":%.4f,\"playing\":%s,\"speed\":%g,"
                       "\"paused\":%s,\"recordMs\":%u,\"ground\":%s,\"walls\":%s,\"gravity\":%s,"
                       "\"walkSpeed\":%.2f,\"walkCmd\":%.2f,\"turn\":%.2f,\"stepHz\":%.1f}",
-                      mode == Mode::Walk ? "walk" : "jump",
+                      mode == Mode::Walk ? "walk" : mode == Mode::PhysWalk ? "physwalk" : "jump",
                       step, phys.bodyHeight(), peak, playing ? "true" : "false", speed,
                       paused ? "true" : "false", drive.steps,
                       phys.world.params.groundOn ? "true" : "false",
                       phys.world.params.wallsOn ? "true" : "false",
                       phys.world.params.gravity.z != 0.0f ? "true" : "false",
-                      measuredSpeed, walkCmd.speed, std::clamp(walkCmd.turn + keyTurn, -1.0f, 1.0f),
-                      std::fabs(cpg.speed()) < 1e-3f ? 0.0f
+                      mode == Mode::Walk ? kin.groundSpeed() : measuredSpeed, walkCmd.speed,
+                      std::clamp(walkCmd.turn + keyTurn, -1.0f, 1.0f),
+                      mode == Mode::Walk ? kin.stepFrequency()
+                      : std::fabs(cpg.speed()) < 1e-3f ? 0.0f
                           : cpg.params.minFrequencyHz +
                             (cpg.params.maxFrequencyHz - cpg.params.minFrequencyHz) * std::fabs(cpg.speed()));
         return buf;
@@ -586,8 +640,13 @@ void tick() {
 extern "C" {
 EMSCRIPTEN_KEEPALIVE void fly_jump() { if (g_app) g_app->resetBody(); }
 // 0 = walk, 1 = jump.
+// 0 = walk (kinematic), 1 = jump, 2 = walk with physics.
 EMSCRIPTEN_KEEPALIVE void fly_mode(int m) {
-    if (g_app) g_app->setMode(m == 1 ? App::Mode::Jump : App::Mode::Walk);
+    if (g_app) g_app->setMode(m == 1 ? App::Mode::Jump : m == 2 ? App::Mode::PhysWalk : App::Mode::Walk);
+}
+// Kinematic walk speed relative to real time (1 = real time).
+EMSCRIPTEN_KEEPALIVE void fly_timescale(float t) {
+    if (g_app) g_app->kinTimeScale = std::clamp(t, 0.02f, 1.0f);
 }
 // Walking command from the page: speed 0..1, turn -1..1 (positive = left).
 EMSCRIPTEN_KEEPALIVE void fly_walk(float speed, float turn) {

@@ -29,6 +29,7 @@ add_library(flycore STATIC
   src/body/MotorPools.cpp
   src/body/SensoryOrgans.cpp
   src/body/WalkController.cpp
+  src/kin/KinematicFly.cpp
   src/engine/Physics.cpp
 )
 target_include_directories(flycore PUBLIC src)
@@ -69,7 +70,7 @@ if(EMSCRIPTEN)
     -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2
     -sALLOW_MEMORY_GROWTH=1
     -sENVIRONMENT=web
-    -sEXPORTED_FUNCTIONS=_main,_fly_jump,_fly_pause,_fly_speed,_fly_toggle,_fly_status,_fly_selftest,_fly_mode,_fly_walk
+    -sEXPORTED_FUNCTIONS=_main,_fly_jump,_fly_pause,_fly_speed,_fly_toggle,_fly_status,_fly_selftest,_fly_mode,_fly_walk,_fly_timescale
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
     "--preload-file=${FLY_WEB_DATA}/drive.bin@/data/drive.bin"
     "--preload-file=${FLY_WEB_DATA}/motor_map.tsv@/data/motor_map.tsv"
@@ -90,6 +91,10 @@ target_link_libraries(flysim PRIVATE flycore)
 # Run from the project root so the default --data path resolves.
 set_target_properties(flysim PROPERTIES
   VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# Kinematic walker tests (variant B2, no physics).
+add_executable(flykin src/kin/kin_main.cpp)
+target_link_libraries(flykin PRIVATE flycore)
 
 # Records runs for the web build (see web/README.md). Native only: it needs
 # the full connectome, which is exactly what the browser cannot load.

@@ -1053,3 +1053,89 @@ which is what it was calibrated with.
 - **Torque, not position.** The controller commands joint angles to the
   posture servos (finding 8's position control). The neural path drives
   torque; walking under torque control remains strictly harder.
+
+---
+
+## 13. Three ways to walk, and a kinematic walker that looks like one
+
+Section 12's pattern generator walked, but it walked badly: only ThC and CTr
+moved, on fixed angle curves, with the two tripods as rigid groups and nothing
+listening to the ground. Reading what others did (NeuroMechFly v1/v2, Walknet,
+flybody, the leg-coordination literature) made the reasons obvious, and split
+the work into three variants:
+
+| | A: neural | B1: physical | B2: kinematic |
+|---|---|---|---|
+| goal | rhythm and commands from the connectome | natural *and* physically defensible | natural-looking, real time |
+| body | physics, muscle torque | physics, servos + feedback | no physics, joint angles set directly |
+| status | open research (finding 9; DNg100 lead below) | prototype = section 12 | **this section** |
+
+B1 and B2 share the idea of a step -- commands, coordination, per-leg step
+planning, inverse kinematics -- so B2 is built first and B1 will reuse it.
+
+### B2: `kin::KinematicFly`
+
+Inspired by published work, not copied from it:
+
+- **Every leg is its own controller.** Stance feet stay planted in the world
+  while the body moves over them; a leg lifts when its foot has fallen
+  `stepUrge` of its reach behind its neutral point, or is forced at the limit.
+- **Gait is not prescribed.** Local rules between neighbours (contralateral and
+  adjacent ipsilateral): no lift-off while a neighbour swings, and a
+  neighbour's touchdown lowers the threshold for a while. That is Walknet's
+  central idea; tripod and wave-like coordination emerge from it.
+- **Swing time is constant, stance carries speed.** DeAngelis et al. (eLife
+  2019) found Drosophila coordination is one continuum, set mainly by stance
+  duration. Here that falls out of the rules rather than being imposed.
+- **Foot placement** ahead along the motion of the body point above the foot,
+  so outer legs automatically take longer strides in a turn.
+- **Inverse kinematics on all joints,** with a 3-DOF coxa (protraction,
+  abduction, rotation) that exists only in this model -- the physics skeleton
+  is untouched -- and per-leg-pair preferences: front and hind legs mostly flex
+  the knee, middle legs mostly rotate the coxa and twist the femur (Anipose,
+  Karashchuk et al. 2021). A soft term keeps the tarsus at a natural slope.
+
+### What it measures (`flykin`, native, no tuning beyond first guesses)
+
+```
+              speed      yaw         steps   duty F/M/H       legs swinging 0/1/2/3
+fast          18.0 mm/s    0 deg/s   15.8 Hz 0.49 0.50 0.50    0/ 0/ 1/99%
+medium         9.0         0         12.7    0.60 0.60 0.60    0/ 0/58/42%
+slow           3.6         0          6.3    0.79 0.79 0.80    5/67/26/ 2%
+turn left     10.8       +71         13.5    0.57              0/ 2/35/62%
+turn right    10.8       -71         13.5    0.57              0/ 2/36/62%
+spin on spot   0.0       +60          4.5    0.86             45/26/28/ 1%
+```
+
+Fast walking is a clean alternating tripod; slow walking keeps mostly one leg
+in the air at a time, with a duty factor of 0.8. Nothing tells it to do either.
+
+Joint use, range in radians over a fast walk:
+
+```
+          ThCpro  ThCabd  ThCrot   CTr    TrF    FTi   TiTa
+front     0.29    0.21    0.22    0.06   0.16   0.81   0.20
+middle    0.78    0.15    0.56    0.10   0.66   0.08   0.21
+hind      1.01    0.12    0.38    0.29   0.31   0.58   0.34
+```
+
+Front legs walk with the knee, middle legs with coxa rotation and femur twist
+and almost no knee -- the published pattern. Hind legs use the knee but lean on
+coxa protraction more than they should: the first thing to tune.
+
+Worst foot error 0.07 mm, about 4% of a leg. 21 s of walking costs 4.5 s of
+CPU natively, so it runs in real time in a browser.
+
+### Still open
+
+- Hind coxa protraction range is high; the foot error at the reach limits
+  could be lower; the tarsus is one straight segment rather than a chain
+  lying on the ground.
+- No flight yet; no backward walking (but nothing in the rules forbids it
+  any more -- foot placement follows the body's velocity).
+- **Neural lead (A):** Pugliese, Tuthill and Brunton (bioRxiv 2025) found a
+  rhythm-generating core circuit in nerve-cord connectome simulations, driven
+  by the walking command neuron DNg100. Finding 9 looked for rhythm in the
+  bulk statistics of the premotor layer and found none; a small identified
+  circuit is exactly what that method could not see. Activating DNg100 in this
+  model is the obvious experiment.

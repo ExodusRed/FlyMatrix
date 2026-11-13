@@ -55,7 +55,13 @@ responsive.
 
 ## Walking
 
-The Walk mode (the default on the Body tab) drives the same live physics with
+The Body tab has two walkers. **Walk** (the default) is `kin::KinematicFly`:
+no physics, per-leg swing/stance controllers with Walknet-style coordination
+rules, foot placement and inverse kinematics over a 3-DOF coxa and the four
+distal joints -- natural-looking and real time. See `docs/findings.md`
+section 13 and `flykin` for the measurements.
+
+**Physics** drives the same live physics with
 `WalkController`: six coupled phase oscillators locked into an alternating
 tripod, a constant-speed stance stroke and a lifted swing, duty factor and lift
 that change with speed, turning by stride asymmetry, and a heading hold. The

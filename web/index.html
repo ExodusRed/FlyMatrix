@@ -106,13 +106,20 @@
       </div>
       <div class="controls">
         <span class="seg" role="group" aria-label="Mode">
-          <button id="mode-walk" aria-pressed="true">Walk</button>
+          <button id="mode-walk" aria-pressed="true" title="Natural leg movement, no physics">Walk</button>
+          <button id="mode-phys" aria-pressed="false" title="Physics body with a pattern generator (prototype)">Physics</button>
           <button id="mode-jump" aria-pressed="false">Jump</button>
         </span>
         <span class="walk-only">
           <label class="speed">Speed <input type="range" id="walk-speed" min="0" max="1" step="0.05" value="1" aria-label="Walking speed"></label>
           <button id="turn-left" aria-label="Turn left (hold)">&#9664; Left</button>
           <button id="turn-right" aria-label="Turn right (hold)">Right &#9654;</button>
+          <select id="kin-time" aria-label="Slow motion">
+            <option value="1">Real time</option>
+            <option value="0.5">0.5&times; slow motion</option>
+            <option value="0.25" selected>0.25&times; slow motion</option>
+            <option value="0.1">0.1&times;</option>
+          </select>
         </span>
         <span class="jump-only" hidden>
           <button class="primary" id="body-jump">Fire giant fibre</button>
@@ -147,13 +154,20 @@
       expensive: one millisecond of fly time costs a few milliseconds of computation.
     </p>
     <p>
-      <b>Walking:</b> the same live physics, driven by a <b>central pattern generator</b>: six coupled oscillators, one
-      per leg, that settle into the alternating tripod gait real flies use, with a stance phase that pushes at constant
-      speed and a swing phase that lifts the foot. Slower walking keeps more feet down, turning shortens the inner
-      strides, and a heading hold stands in for the visual and haltere feedback a fly uses to keep its course. This
-      rhythm is a <b>modelling choice, not the connectome</b>: the wiring alone does not produce a walking rhythm in this
-      model, which is an open research question. It walks at about 10 mm/s and 20 steps per second, the slow end of a
-      real fly's 10&ndash;25 mm/s.
+      <b>Walk</b> (the default) is a <b>kinematic</b> fly: no forces, just natural-looking movement that runs in real time.
+      Each leg has its own swing/stance controller; feet stay planted while the body moves over them; a leg lifts when
+      its foot falls behind its reach, and local rules between neighbouring legs (don't lift while a neighbour swings,
+      lift sooner after a neighbour lands) let the gait <i>emerge</i>: a tripod when fast, more legs on the ground when
+      slow, as in real flies. Inverse kinematics moves all leg joints, including a three-axis coxa, the way the leg pairs
+      of real flies do: front and hind legs mostly bend the knee, middle legs rotate the coxa and femur. These ideas are
+      inspired by published work on insect walking (Walknet; DeAngelis et al. 2019; Karashchuk et al. 2021), not copied
+      from it.
+    </p>
+    <p>
+      <b>Physics</b> is the earlier prototype of a <b>physical</b> walker: the real physics body driven by a pattern
+      generator. It is rougher, and is the starting point for a version that uses the same leg controllers with real
+      forces. Neither walking rhythm comes from the connectome: in this model the wiring alone does not produce a walking
+      rhythm, which remains an open research question.
     </p>
     <p>
       <b>A caveat worth knowing:</b> the takeoff is very sensitive to floating-point rounding. With bit-identical muscle
@@ -268,10 +282,13 @@
       }
       lastT = s.t; lastClock = now;
       const slow = slowMo > 1.05 ? ` · slow motion ×${slowMo.toFixed(0)}` : '';
-      if (s.mode === 'walk') {
+      if (s.mode === 'walk' || s.mode === 'physwalk') {
         const dir = s.turn > 0.05 ? ' · turning left' : s.turn < -0.05 ? ' · turning right' : '';
-        bodyHud.innerHTML = `walking <b>${s.walkSpeed.toFixed(1)} mm/s</b> · ${s.stepHz.toFixed(0)} steps/s${dir}${slow}<br>` +
-          `rhythm from a modelled pattern generator (glowing legs are in swing)`;
+        const how = s.mode === 'walk'
+          ? 'kinematic walker: gait emerges from per-leg rules, no physics (glowing legs are in swing)'
+          : 'physics body + pattern generator: prototype of the physical walker';
+        const sm = s.mode === 'walk' ? '' : slow;
+        bodyHud.innerHTML = `walking <b>${s.walkSpeed.toFixed(1)} mm/s</b> · ${s.stepHz.toFixed(0)} steps/s${dir}${sm}<br>${how}`;
       } else {
         const phase = s.playing ? (s.t < 20 ? '<span class="stim">GIANT FIBRE FIRING</span>' : 'muscles driven by recorded motor neurons')
                                 : 'recording finished, the fly is on its own';
@@ -281,18 +298,22 @@
     const call = (name, ...args) => bodyReady && Module.ccall(name, null, args.map(() => 'number'), args);
     const setMode = (m) => {
       bodyMode = m;
-      call('fly_mode', m === 'jump' ? 1 : 0);
-      document.getElementById('mode-walk').setAttribute('aria-pressed', String(m === 'walk'));
-      document.getElementById('mode-jump').setAttribute('aria-pressed', String(m === 'jump'));
-      document.querySelector('.walk-only').hidden = m !== 'walk';
+      call('fly_mode', m === 'jump' ? 1 : m === 'phys' ? 2 : 0);
+      for (const id of ['walk', 'phys', 'jump']) {
+        document.getElementById('mode-' + id).setAttribute('aria-pressed', String(m === id));
+      }
+      document.querySelector('.walk-only').hidden = m === 'jump';
+      document.getElementById('kin-time').hidden = m !== 'walk';
       document.querySelector('.jump-only').hidden = m !== 'jump';
-      document.getElementById('body-hint').textContent = m === 'walk'
+      document.getElementById('body-hint').textContent = m !== 'jump'
         ? 'Hold Left/Right or A/D to steer · W/S speed · drag to orbit · scroll to zoom'
         : 'Drag to orbit · right-drag to pan · scroll to zoom';
-      if (m === 'walk') sendWalk();
+      if (m !== 'jump') sendWalk();
     };
     document.getElementById('mode-walk').onclick = () => setMode('walk');
+    document.getElementById('mode-phys').onclick = () => setMode('phys');
     document.getElementById('mode-jump').onclick = () => setMode('jump');
+    document.getElementById('kin-time').onchange = (e) => call('fly_timescale', Number(e.target.value));
 
     let turnHeld = 0;
     const speedInput = document.getElementById('walk-speed');
@@ -309,7 +330,7 @@
     }
 
     document.getElementById('body-jump').onclick = () => { call('fly_jump'); bodyPaused = false; call('fly_pause', 0); document.getElementById('body-pause').textContent = 'Pause'; };
-    document.getElementById('body-reset').onclick = () => { call('fly_jump'); if (bodyMode === 'walk') sendWalk(); };
+    document.getElementById('body-reset').onclick = () => { call('fly_jump'); if (bodyMode !== 'jump') sendWalk(); };
     document.getElementById('body-pause').onclick = (e) => { bodyPaused = !bodyPaused; call('fly_pause', bodyPaused ? 1 : 0); e.target.textContent = bodyPaused ? 'Resume' : 'Pause'; };
     document.getElementById('body-speed').onchange = (e) => call('fly_speed', Number(e.target.value));
 
