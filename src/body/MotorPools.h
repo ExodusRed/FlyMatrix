@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -88,7 +89,12 @@ public:
         }
     };
     // Throws std::runtime_error if the map is missing or names no known joint.
-    static MotorPools load(const std::string& tsvPath, Params params = {});
+    static MotorPools load(const std::string& tsvPath, Params params);
+    // Two overloads rather than `Params params = {}`: a default argument of a
+    // nested type with member initialisers is rejected by Clang and GCC (the
+    // class is not complete yet), which broke the WebAssembly build. Inside a
+    // function body the class is complete, so this form compiles everywhere.
+    static MotorPools load(const std::string& tsvPath) { return load(tsvPath, Params{}); }
 
     // Accumulate spikes from one simulation step.
     void accumulate(const LIFNetwork& net);
@@ -109,6 +115,14 @@ public:
     float peakActivation(int leg, int joint) const;
 
     const std::vector<Muscle>& muscles() const { return muscles_; }
+
+    // Replay support for the web build, which has no connectome to simulate:
+    // it plays back unit activations recorded from a native run instead.
+    // Units are counted and written in muscles() order, then unit order, which
+    // is fixed by the motor map, so a recording and a load of the same map
+    // always line up.
+    std::size_t unitCount() const;
+    void setActivations(std::span<const float> activations);
     std::size_t mappedNeurons() const { return mapped_; }
     bool isMotorNeuron(std::uint32_t idx) const;
 

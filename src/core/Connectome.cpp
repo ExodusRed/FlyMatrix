@@ -83,6 +83,9 @@ Connectome Connectome::load(const std::string& binPath) {
     c.signs_     = take<std::int8_t>(c.buffer_, off, n, "sign");
     c.flags_     = take<std::uint8_t>(c.buffer_, off, n, "flags");
     take<std::uint8_t>(c.buffer_, off, n, "pad");
+    // The packer pads to 8 bytes here; with an even neuron count there is
+    // nothing to skip.
+    off = (off + 7) & ~std::size_t{7};
     c.rowStart_  = take<std::uint64_t>(c.buffer_, off, n + 1, "row_start");
     c.col_       = take<std::uint32_t>(c.buffer_, off, e, "col");
     c.weight_    = take<std::uint16_t>(c.buffer_, off, e, "weight");

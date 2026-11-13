@@ -102,7 +102,9 @@ public:
         float fullTibiaAngle = 0.5f;
     };
 
-    static SensoryOrgans load(const std::string& tsvPath, Params params = {});
+    static SensoryOrgans load(const std::string& tsvPath, Params params);
+    // Separate overload instead of `= {}`; see MotorPools::load.
+    static SensoryOrgans load(const std::string& tsvPath) { return load(tsvPath, Params{}); }
 
     // Load the extensor/flexor assignment from tools/feco_split.py. Without
     // it every chordotonal neuron stays in one undifferentiated group and the
