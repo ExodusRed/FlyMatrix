@@ -1139,3 +1139,57 @@ CPU natively, so it runs in real time in a browser.
   bulk statistics of the premotor layer and found none; a small identified
   circuit is exactly what that method could not see. Activating DNg100 in this
   model is the obvious experiment.
+
+---
+
+## 14. The body could not use its legs: anatomy v2
+
+A review against the literature found the leg geometry wrong in ways that make
+a leg hard to use, whatever drives it:
+
+| | model (v1) | fly |
+|---|---|---|
+| coxa base | on the flanks, 0.29 mm off the midline, at mid-height | ventral, near the midline, braced by the furcae |
+| front coxa | the shortest, hanging down | the longest, projecting forward under the head |
+| segment lengths | the middle leg scaled by 0.88 / 1.0 / 1.12 | femurs similar across pairs; front tibia shorter; hind longer in tibia and tarsus |
+| thorax-coxa | hinge plus fixed splay (physics) | ball joint, 3 DOF |
+| hinge axes | exactly perpendicular | oblique, between two condyles |
+| knee | +/-149 degrees, symmetric | one way, about 0-170 degrees |
+| tarsus | 5 passive tarsomeres, contact at the tip | 5 tarsomeres lying along the ground |
+
+Three things were already right: body length 2.5 mm, middle leg 1.94 mm
+against a measured 1.89-2.18 (Chun, Biswas and Bhandawat, eLife 2021), and the
+standing foot spread to body height ratio, L/r = 1.49 against 1-2 (same).
+
+### What changed
+
+`anat::v2` in `Anatomy.h`, used by the kinematic model only for now. The
+*relationships* in the table are published; the *numbers* are estimated to
+satisfy them and labelled so. No measured coordinates were taken from other
+projects' data. The physics skeleton keeps v1 until v2 has proven itself.
+
+```
+                 v2: coxa base (x, y, z)   length   neutral foot
+front            ( 0.36, 0.11, -0.26)      1.84     ( 0.95, 0.60)
+middle           ( 0.02, 0.15, -0.32)      1.92     ( 0.05, 0.95)
+hind             (-0.24, 0.14, -0.30)      2.09     (-0.80, 0.80)
+```
+
+The rest pose reaches all six neutral feet to 0.005 mm, L/r = 1.46, and the
+gait from section 13 is unchanged -- the planner never depended on the body.
+
+Joint use moved the right way where it mattered most. The hind legs had leaned
+on coxa protraction (1.01 rad of range) and now walk mainly with the knee
+(protraction 0.67, knee 0.78). The middle legs stay rotation-driven (coxa
+rotation 0.68, knee 0.15). The front legs now also swing and abduct the coxa
+(0.91, 0.50) alongside the knee (0.85) -- the abduction is more than a fly
+uses and is the next thing to tune. Worst ankle error rose from 0.069 to
+0.084 mm.
+
+### Next
+
+- Tune the front-leg abduction and the ankle error.
+- Replace the estimated numbers with measurements if that is adopted.
+- Carry v2 into the physics skeleton (3-DOF coxa there needs a new joint type,
+  a re-solved rest pose and a re-checked jump and walk).
+- Head and abdomen articulation.

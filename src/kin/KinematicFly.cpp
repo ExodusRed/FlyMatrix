@@ -3,13 +3,25 @@
 #include <algorithm>
 #include <cmath>
 
+#include "body/Anatomy.h"
+
 namespace fly::kin {
 namespace {
 
 constexpr float kPi = 3.14159265f;
 
 int pairOf(int leg) { return leg / 2; }  // 0 front, 1 middle, 2 hind
-int sideOf(int leg) { return leg % 2 == 0 ? 1 : -1; }  // +1 left
+float sideOf(int leg) { return leg % 2 == 0 ? 1.0f : -1.0f; }  // +1 left
+
+const anat::v2::LegSpec& specOf(int leg) {
+    switch (pairOf(leg)) {
+        case 0: return anat::v2::kFront;
+        case 1: return anat::v2::kMiddle;
+        default: return anat::v2::kHind;
+    }
+}
+
+V3 mirrorY(const V3& v, float side) { return {v.x, v.y * side, v.z}; }
 
 // World point -> body frame (Transform has no inverse; scale is always 1 here).
 V3 toBody(const Transform& t, const V3& p) {
@@ -17,22 +29,44 @@ V3 toBody(const Transform& t, const V3& p) {
     return conj.rotate(p - t.position);
 }
 
+// Quaternion of the rotation whose columns are the orthonormal axes x, y, z.
+Quat fromBasis(const V3& x, const V3& y, const V3& z) {
+    const float trace = x.x + y.y + z.z;
+    Quat q;
+    if (trace > 0.0f) {
+        const float s = std::sqrt(trace + 1.0f) * 2.0f;
+        q = {0.25f * s, (y.z - z.y) / s, (z.x - x.z) / s, (x.y - y.x) / s};
+    } else if (x.x > y.y && x.x > z.z) {
+        const float s = std::sqrt(1.0f + x.x - y.y - z.z) * 2.0f;
+        q = {(y.z - z.y) / s, 0.25f * s, (y.x + x.y) / s, (z.x + x.z) / s};
+    } else if (y.y > z.z) {
+        const float s = std::sqrt(1.0f + y.y - x.x - z.z) * 2.0f;
+        q = {(z.x - x.z) / s, (y.x + x.y) / s, 0.25f * s, (z.y + y.z) / s};
+    } else {
+        const float s = std::sqrt(1.0f + z.z - x.x - y.y) * 2.0f;
+        q = {(x.y - y.x) / s, (z.x + x.z) / s, (z.y + y.z) / s, 0.25f * s};
+    }
+    return q.normalised();
+}
+
 float smoothstep(float x) {
     x = std::clamp(x, 0.0f, 1.0f);
     return x * x * (3.0f - 2.0f * x);
 }
 
-// IK preference weights, per leg pair, in DOF order
-// (ThC pro, ThC abd, ThC rot, CTr, TrF, FTi, TiTa). A LOW weight makes a joint
-// cheap to move, so the solver uses it first. Front and hind legs step mostly
-// by flexing the knee; middle legs mostly by rotating the coxa and twisting the
-// femur. Abduction at the coxa is kept expensive: real legs swing fore-aft far
-// more than they splay.
-constexpr float kWeights[3][KinematicFly::DofCount] = {
-    {0.40f, 3.0f, 2.0f, 1.0f, 2.0f, 0.15f, 0.6f},  // front
-    {0.30f, 3.0f, 0.4f, 1.0f, 0.4f, 0.80f, 0.6f},  // middle
-    {0.50f, 3.0f, 2.0f, 1.0f, 2.0f, 0.15f, 0.6f},  // hind
+// IK preference weights per leg pair, for (ThC pro, ThC abd, ThC rot, CTr,
+// TrF, FTi). A LOW weight makes a joint cheap to move, so the solver uses it
+// first: front and hind legs step mostly with the knee, middle legs mostly by
+// rotating the coxa and twisting the femur. Coxa abduction stays expensive.
+constexpr float kWeights[3][KinematicFly::kIkDofs] = {
+    {0.40f, 3.0f, 2.0f, 1.0f, 2.0f, 0.15f},  // front
+    {0.30f, 3.0f, 0.4f, 1.0f, 0.4f, 0.80f},  // middle
+    {1.00f, 3.0f, 2.0f, 1.0f, 2.0f, 0.15f},  // hind: coxa swing dearer, v1 leaned on it
 };
+
+// Tarsomere radii for drawing, proximal to distal.
+constexpr float kTarsomereRadius[anat::kTarsomereCount] = {0.020f, 0.018f, 0.016f, 0.015f, 0.014f};
+constexpr float kSegmentRadius[4] = {0.050f, 0.040f, 0.036f, 0.028f};  // coxa, troch, femur, tibia
 
 // Solve A x = b for a small dense system (Gaussian elimination, partial pivot).
 template <int N>
@@ -66,29 +100,50 @@ bool solveLinear(float a[N][N], float b[N], float x[N]) {
 KinematicFly::KinematicFly() { reset(); }
 
 void KinematicFly::reset() {
-    skeleton_ = FlyBody{};
-    const auto& legs = skeleton_.legs();
-    float footZ = 0.0f;
+    worstIkError_ = 0.0f;
     for (int l = 0; l < kLegCount; ++l) {
         LegState& s = legs_[l];
-        const Leg& L = legs[l];
-        s.rest = {L.joints[0].restAngle, 0.0f, 0.0f, L.joints[1].restAngle,
-                  L.joints[2].restAngle, L.joints[3].restAngle, L.joints[4].restAngle};
-        s.lo = {L.joints[0].minAngle, -0.5f, -0.7f, L.joints[1].minAngle,
-                L.joints[2].minAngle, L.joints[3].minAngle, L.joints[4].minAngle};
-        s.hi = {L.joints[0].maxAngle, 0.5f, 0.7f, L.joints[1].maxAngle,
-                L.joints[2].maxAngle, L.joints[3].maxAngle, L.joints[4].maxAngle};
-        for (int d = 0; d < DofCount; ++d) s.weight[d] = kWeights[pairOf(l)][d];
+        const anat::v2::LegSpec& spec = specOf(l);
+        s.side = sideOf(l);
+        s.attach = mirrorY(spec.attach, s.side);
+        s.len[0] = spec.coxa;
+        s.len[1] = spec.trochanter;
+        s.len[2] = spec.femur;
+        s.len[3] = spec.tibia;
+        s.len[4] = spec.tarsus;
+        s.neutralBody = mirrorY(spec.foot, s.side);
+        const V3 td = mirrorY(spec.tarsusDir, s.side);
+        s.tarsusDirBody = normalise(V3{td.x, td.y, 0.0f});
+
+        // Coxa rest frame: local -Z along the coxa, local X as close to the
+        // body's forward axis as the coxa allows, local Y completing it. For
+        // a mirrored pair this gives mirrored frames, so a hinge about local
+        // Y bends both sides the same way (see FlyBody.cpp on mirroring).
+        const V3 down = normalise(mirrorY(spec.coxaDir, s.side));
+        const V3 zAxis = down * -1.0f;
+        const V3 fwd{1, 0, 0};
+        const V3 xAxis = normalise(fwd - zAxis * dot(fwd, zAxis));
+        const V3 yAxis = cross(zAxis, xAxis);
+        s.coxaFrame = fromBasis(xAxis, yAxis, zAxis);
+
+        s.lo = {-1.2f, -0.6f, -1.2f, -1.8f, -0.8f, anat::v2::kKneeMin, -1.5f};
+        s.hi = {1.2f, 0.6f, 1.2f, 1.8f, 0.8f, anat::v2::kKneeMax, 1.5f};
+        for (int d = 0; d < kIkDofs; ++d) s.weight[d] = kWeights[pairOf(l)][d];
+
+        // Rest pose: solve for the neutral foot from a folded starting guess
+        // (femur raised, knee bent), regularised towards that guess so the
+        // solution stays in the same insect-like branch.
+        s.rest = {0.0f, 0.0f, 0.0f, -1.2f, 0.0f, 2.0f, 0.0f};
         s.q = s.rest;
-        s.neutralBody = legFk(l, s.rest);
-        footZ += s.neutralBody.z;
+        solveIk(l, ankleTargetFor(l, s.neutralBody, 0.0f), 400);
+        s.rest = s.q;
         s.swing = false;
         s.swingT = 0.0f;
         s.boost = 0.0f;
         s.stepsTaken = 0;
     }
-    // Stand the body at the height the rest pose puts its feet on the ground.
-    baseHeight_ = -footZ / kLegCount;
+    restIkError_ = worstIkError_;
+    baseHeight_ = anat::v2::kStandHeight;
     groundZ_ = 0.0f;
     heading_ = 0.0f;
     root_ = Transform{{0.0f, 0.0f, baseHeight_}, Quat{}, 1.0f};
@@ -106,62 +161,68 @@ void KinematicFly::reset() {
     clock_ = 0.0f;
 }
 
-V3 KinematicFly::legFk(int leg, const std::array<float, DofCount>& q, V3* tibiaEnd,
-                       std::vector<V3>* points, std::vector<Quat>* frames) const {
-    const Leg& L = skeleton_.legs()[leg];
-    const float side = static_cast<float>(sideOf(leg));
-    Transform frame{L.attach, L.mount, 1.0f};
-    if (points) points->push_back(frame.position);
-
-    auto advance = [&](const V3& axis, float angle, float length) {
-        frame.rotation = (frame.rotation * Quat::axisAngle(axis, angle)).normalised();
-        if (frames) frames->push_back(frame.rotation);
-        frame.position = frame.position + frame.rotation.rotate({0, 0, -1}) * length;
-        if (points) points->push_back(frame.position);
+V3 KinematicFly::ankleFk(int leg, const std::array<float, DofCount>& q, std::vector<V3>* points) const {
+    const LegState& s = legs_[leg];
+    const float side = s.side;
+    const float obl = anat::v2::kHingeObliquityDeg * kPi / 180.0f;
+    const V3 X{1, 0, 0}, Y{0, 1, 0}, Z{0, 0, 1};
+    Quat r = s.coxaFrame;
+    V3 p = s.attach;
+    if (points) points->push_back(p);
+    auto segment = [&](float length) {
+        p = p + r.rotate({0, 0, -1}) * length;
+        if (points) points->push_back(p);
     };
-
-    // The 3-DOF coxa: protraction about the lateral axis (FlyBody's ThC), then
-    // abduction about the fore-aft axis and rotation about the coxa's own long
-    // axis, both mirrored per side.
-    frame.rotation = (frame.rotation * Quat::axisAngle(L.joints[0].axis, q[ThCPro])).normalised();
-    frame.rotation = (frame.rotation * Quat::axisAngle(V3{side, 0, 0}, q[ThCAbd])).normalised();
-    advance(V3{0, 0, side}, q[ThCRot], L.joints[0].segmentLength);
-    advance(L.joints[1].axis, q[CTr], L.joints[1].segmentLength);
-    advance(L.joints[2].axis, q[TrF], L.joints[2].segmentLength);
-    advance(L.joints[3].axis, q[FTi], L.joints[3].segmentLength);
-    if (tibiaEnd) *tibiaEnd = frame.position;
-    advance(L.joints[4].axis, q[TiTa], L.joints[4].segmentLength);
-    return frame.position;
+    // Thorax-coxa ball joint: swing (about local Y), abduction (local X) and
+    // rotation about the coxa's own axis (local Z); X and Z mirror per side.
+    r = (r * Quat::axisAngle(Y, q[ThCPro])).normalised();
+    r = (r * Quat::axisAngle(X * side, q[ThCAbd])).normalised();
+    r = (r * Quat::axisAngle(Z * side, q[ThCRot])).normalised();
+    segment(s.len[0]);
+    // CTr and FTi hinge about axes tilted off the perpendicular, the way real
+    // hinges run between two condyles. TrF twists the femur about its axis.
+    const V3 ctrAxis = Quat::axisAngle(Z * side, obl).rotate(Y);
+    r = (r * Quat::axisAngle(ctrAxis, q[CTr])).normalised();
+    segment(s.len[1]);
+    r = (r * Quat::axisAngle(Z * side, q[TrF])).normalised();
+    segment(s.len[2]);
+    const V3 ftiAxis = Quat::axisAngle(Z * side, -obl).rotate(Y);
+    r = (r * Quat::axisAngle(ftiAxis, q[FTi])).normalised();
+    segment(s.len[3]);
+    return p;
 }
 
-void KinematicFly::solveIk(int leg, const V3& target) {
+V3 KinematicFly::ankleTargetFor(int leg, const V3& foot, float /*lift*/) const {
+    const LegState& s = legs_[leg];
+    // The first tarsomere slopes from the ankle down to the contact point;
+    // the rest of the tarsus lies along the ground beyond it.
+    const float l1 = s.len[4] * anat::kTarsomereFrac[0];
+    const float slope = anat::v2::kTarsusSlopeDeg * kPi / 180.0f;
+    const V3 d = s.tarsusDirBody;
+    return {foot.x - d.x * std::cos(slope) * l1, foot.y - d.y * std::cos(slope) * l1,
+            foot.z + std::sin(slope) * l1};
+}
+
+void KinematicFly::solveIk(int leg, const V3& target, int iterations) {
     LegState& s = legs_[leg];
-    const float tarsusLen = skeleton_.legs()[leg].joints[4].segmentLength;
-    const float tarsusRise = tarsusLen * std::sin(params.tarsusAngleDeg * kPi / 180.0f);
-    constexpr int kRes = 4 + DofCount;  // foot xyz, tarsus slope, preferences
-    constexpr float kLambda = 0.004f;   // overall strength of the preferences
-    constexpr float kSlopeWeight = 0.5f;
+    constexpr int kRes = 3 + kIkDofs;
+    constexpr float kLambda = 0.004f;
 
     auto residuals = [&](const std::array<float, DofCount>& q, float r[kRes]) {
-        V3 tib;
-        const V3 tip = legFk(leg, q, &tib);
-        r[0] = tip.x - target.x;
-        r[1] = tip.y - target.y;
-        r[2] = tip.z - target.z;
-        // Keep the tarsus lying at a natural slope rather than standing on its tip.
-        r[3] = kSlopeWeight * (tib.z - (target.z + tarsusRise));
-        for (int d = 0; d < DofCount; ++d) {
-            r[4 + d] = std::sqrt(kLambda * s.weight[d]) * (q[d] - s.rest[d]);
+        const V3 a = ankleFk(leg, q);
+        r[0] = a.x - target.x;
+        r[1] = a.y - target.y;
+        r[2] = a.z - target.z;
+        for (int d = 0; d < kIkDofs; ++d) {
+            r[3 + d] = std::sqrt(kLambda * s.weight[d]) * (q[d] - s.rest[d]);
         }
     };
 
-    // Damped Gauss-Newton, warm-started from last frame's angles. A few
-    // iterations a frame are plenty because the target moves only a little.
-    for (int it = 0; it < 4; ++it) {
+    for (int it = 0; it < iterations; ++it) {
         float r0[kRes];
         residuals(s.q, r0);
-        float jac[kRes][DofCount];
-        for (int d = 0; d < DofCount; ++d) {
+        float jac[kRes][kIkDofs];
+        for (int d = 0; d < kIkDofs; ++d) {
             auto qd = s.q;
             const float h = 1e-3f;
             qd[d] += h;
@@ -169,10 +230,10 @@ void KinematicFly::solveIk(int leg, const V3& target) {
             residuals(qd, r1);
             for (int k = 0; k < kRes; ++k) jac[k][d] = (r1[k] - r0[k]) / h;
         }
-        float a[DofCount][DofCount] = {};
-        float g[DofCount] = {};
-        for (int i = 0; i < DofCount; ++i) {
-            for (int j = 0; j < DofCount; ++j) {
+        float a[kIkDofs][kIkDofs] = {};
+        float g[kIkDofs] = {};
+        for (int i = 0; i < kIkDofs; ++i) {
+            for (int j = 0; j < kIkDofs; ++j) {
                 float sum = 0.0f;
                 for (int k = 0; k < kRes; ++k) sum += jac[k][i] * jac[k][j];
                 a[i][j] = sum;
@@ -182,14 +243,14 @@ void KinematicFly::solveIk(int leg, const V3& target) {
             for (int k = 0; k < kRes; ++k) sum += jac[k][i] * r0[k];
             g[i] = -sum;
         }
-        float dq[DofCount];
-        if (!solveLinear<DofCount>(a, g, dq)) break;
-        for (int d = 0; d < DofCount; ++d) {
+        float dq[kIkDofs];
+        if (!solveLinear<kIkDofs>(a, g, dq)) break;
+        for (int d = 0; d < kIkDofs; ++d) {
             s.q[d] = std::clamp(s.q[d] + std::clamp(dq[d], -0.3f, 0.3f), s.lo[d], s.hi[d]);
         }
     }
-    const V3 tip = legFk(leg, s.q);
-    worstIkError_ = std::max(worstIkError_, length(tip - target));
+    const V3 a = ankleFk(leg, s.q);
+    worstIkError_ = std::max(worstIkError_, length(a - target));
 }
 
 V3 KinematicFly::touchdownTargetBody(int leg) const {
@@ -197,14 +258,12 @@ V3 KinematicFly::touchdownTargetBody(int leg) const {
     const V3 r = s.neutralBody;
     // Velocity of the body point above this foot, in the body frame. A planted
     // foot drifts the opposite way, so the foot is placed *ahead* along this
-    // direction -- further for legs on the outside of a turn, which is what
-    // makes them take longer strides without any explicit rule.
+    // direction -- further for legs on the outside of a turn.
     const V3 v{velocityBody_.x - yawRate_ * r.y, yawRate_ * r.x, 0.0f};
     const float speed = std::sqrt(v.x * v.x + v.y * v.y);
     const float reach = params.reach[pairOf(leg)];
     V3 t = r;
     if (speed > 1e-4f) {
-        // Ramp the placement in with speed so slow walking takes small steps.
         const float place = reach * 0.8f * std::min(1.0f, speed / 4.0f);
         t.x += v.x / speed * place;
         t.y += v.y / speed * place;
@@ -221,17 +280,14 @@ float KinematicFly::urge(int leg) const {
     const V3 v{velocityBody_.x - yawRate_ * r.y, yawRate_ * r.x, 0.0f};
     const float speed = std::sqrt(v.x * v.x + v.y * v.y);
     if (speed < 1e-3f) return std::sqrt(dx * dx + dy * dy) / reach;
-    // How far the foot has fallen behind its neutral point, along the
-    // direction it is being dragged, plus any sideways error.
     const float along = (dx * v.x + dy * v.y) / speed;
     const float across = std::fabs(-dx * v.y + dy * v.x) / speed;
     return (std::max(0.0f, -along) + 0.5f * across) / reach;
 }
 
 bool KinematicFly::neighbourSwinging(int leg) const {
-    const int contra = leg ^ 1;
-    if (legs_[contra].swing) return true;
-    const int ahead = leg - 2, behind = leg + 2;  // same side, adjacent segment
+    if (legs_[leg ^ 1].swing) return true;
+    const int ahead = leg - 2, behind = leg + 2;
     if (ahead >= 0 && legs_[ahead].swing) return true;
     if (behind < kLegCount && legs_[behind].swing) return true;
     return false;
@@ -255,6 +311,11 @@ float KinematicFly::stepFrequency() const {
     return n ? sum / n : 0.0f;
 }
 
+KinematicFly::LegGeometry KinematicFly::geometry(int leg) const {
+    const LegState& s = legs_[leg];
+    return {s.attach, {s.len[0], s.len[1], s.len[2], s.len[3], s.len[4]}, s.neutralBody};
+}
+
 void KinematicFly::step(float dt, const Command& cmd) {
     clock_ += dt;
 
@@ -263,19 +324,16 @@ void KinematicFly::step(float dt, const Command& cmd) {
     const float turnCmd = std::clamp(cmd.turn, -1.0f, 1.0f);
     const float wantV = speedCmd * params.maxSpeed;
     const float yawMax = (speedCmd > 0.05f ? params.maxYawRateDeg : params.spinYawRateDeg) * kPi / 180.0f;
-    const float wantYaw = turnCmd * yawMax;
     const float k = 1.0f - std::exp(-dt / 0.15f);
     velocityBody_.x += (wantV - velocityBody_.x) * k;
-    yawRate_ += (wantYaw - yawRate_) * k;
+    yawRate_ += (turnCmd * yawMax - yawRate_) * k;
 
     // --- body: glides over the planted feet ---
     const V3 before = root_.position;
     const float beforeHeading = heading_;
     heading_ += yawRate_ * dt;
-    const float c = std::cos(heading_), sn = std::sin(heading_);
-    root_.position.x += c * velocityBody_.x * dt;
-    root_.position.y += sn * velocityBody_.x * dt;
-    // The body dips a little while legs are in the air.
+    root_.position.x += std::cos(heading_) * velocityBody_.x * dt;
+    root_.position.y += std::sin(heading_) * velocityBody_.x * dt;
     const float wantZ = baseHeight_ - params.bodyBob * static_cast<float>(swingCount());
     root_.position.z += (wantZ - root_.position.z) * (1.0f - std::exp(-dt / 0.02f));
     root_.rotation = Quat::axisAngle({0, 0, 1}, heading_);
@@ -296,8 +354,6 @@ void KinematicFly::step(float dt, const Command& cmd) {
         V3 target = root_.apply(touchdownTargetBody(l));
         target.z = groundZ_;
         if (u >= 1.0f) {
-            // Touchdown. Neighbours are now encouraged to lift (Walknet's
-            // "a leg that has just stepped makes its neighbours more likely to").
             s.footWorld = target;
             s.swing = false;
             ++s.stepsTaken;
@@ -307,8 +363,7 @@ void KinematicFly::step(float dt, const Command& cmd) {
             }
             continue;
         }
-        const float e = smoothstep(u);
-        V3 p = s.liftoffWorld + (target - s.liftoffWorld) * e;
+        V3 p = s.liftoffWorld + (target - s.liftoffWorld) * smoothstep(u);
         p.z = groundZ_ + params.liftHeight * std::sin(kPi * u);
         s.footWorld = p;
     }
@@ -333,9 +388,20 @@ void KinematicFly::step(float dt, const Command& cmd) {
         lastStepAt_[l] = clock_;
     }
 
-    // --- inverse kinematics for every leg ---
+    // --- inverse kinematics: ankle to where the tarsus needs it ---
     worstIkError_ = 0.0f;
-    for (int l = 0; l < kLegCount; ++l) solveIk(l, toBody(root_, legs_[l].footWorld));
+    for (int l = 0; l < kLegCount; ++l) {
+        solveIk(l, ankleTargetFor(l, toBody(root_, legs_[l].footWorld), 0.0f), 4);
+    }
+    // Report the ankle angle: between the tibia and the first tarsomere.
+    for (int l = 0; l < kLegCount; ++l) {
+        LegState& s = legs_[l];
+        std::vector<V3> pts;
+        ankleFk(l, s.q, &pts);
+        const V3 tibia = normalise(pts[4] - pts[3]);
+        const V3 ta1 = normalise(toBody(root_, s.footWorld) - pts[4]);
+        s.q[TiTa] = std::acos(std::clamp(dot(tibia, ta1), -1.0f, 1.0f));
+    }
 }
 
 void KinematicFly::translate(const V3& d) {
@@ -350,13 +416,30 @@ void KinematicFly::segments(std::vector<FlyBody::SegmentPose>& out) const {
     out.clear();
     std::vector<V3> pts;
     for (int l = 0; l < kLegCount; ++l) {
+        const LegState& s = legs_[l];
         pts.clear();
-        legFk(l, legs_[l].q, nullptr, &pts);
-        // pts: attach, coxa end, trochanter end, femur end, tibia end, tip.
-        const auto& joints = skeleton_.legs()[l].joints;
-        for (int j = 0; j < kJointCount; ++j) {
-            out.push_back({root_.apply(pts[j]), root_.apply(pts[j + 1]), joints[j].segmentRadius,
+        ankleFk(l, s.q, &pts);
+        // pts: attach, coxa end, trochanter end, femur end, ankle.
+        for (int j = 0; j < 4; ++j) {
+            out.push_back({root_.apply(pts[j]), root_.apply(pts[j + 1]), kSegmentRadius[j],
                            static_cast<LegId>(l), static_cast<Joint>(j)});
+        }
+        // Tarsus: ta1 from the ankle down to the contact point, then ta2-ta5
+        // lying along the ground (or trailing, slightly curled, in swing).
+        const V3 ankle = root_.apply(pts[4]);
+        const V3 contact = s.footWorld;
+        out.push_back({ankle, contact, kTarsomereRadius[0], static_cast<LegId>(l), Joint::TiTa});
+        const V3 dir = root_.rotation.rotate(s.tarsusDirBody);
+        V3 p = contact;
+        for (int t = 1; t < anat::kTarsomereCount; ++t) {
+            const float segLen = s.len[4] * anat::kTarsomereFrac[t];
+            // On the ground the tarsus lies flat; in the air it droops a little
+            // more with each segment.
+            const float droop = s.swing ? 0.25f * static_cast<float>(t) : 0.0f;
+            V3 next = p + dir * (segLen * std::cos(droop));
+            next.z = s.swing ? p.z - segLen * std::sin(droop) : groundZ_ + 0.004f;
+            out.push_back({p, next, kTarsomereRadius[t], static_cast<LegId>(l), Joint::TiTa});
+            p = next;
         }
     }
 }

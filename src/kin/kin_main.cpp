@@ -16,6 +16,7 @@
 #include <string>
 
 #include "kin/KinematicFly.h"
+#include <vector>
 
 using namespace fly;
 using namespace fly::kin;
@@ -118,7 +119,62 @@ void report(const char* name, float seconds, float speed, float turn, bool timel
 
 }  // namespace
 
+// Geometry of the standing pose, for comparing the body against anatomy.
+void printPose() {
+    FlyBody body;
+    std::printf("thorax centre height %.3f mm\n\n", body.root.position.z);
+    std::printf("%-9s %22s %22s %8s %8s\n", "leg", "coxa attach (x,y,z)", "foot (x,y,z)", "length", "reach");
+    for (int l = 0; l < kLegCount; ++l) {
+        const Leg& L = body.legs()[l];
+        float len = 0;
+        for (const auto& j : L.joints) len += j.segmentLength;
+        const V3 a = body.root.apply(L.attach);
+        const V3 f = body.footPosition(static_cast<LegId>(l));
+        const float reach = std::sqrt((f.x - a.x) * (f.x - a.x) + (f.y - a.y) * (f.y - a.y));
+        std::printf("%-9s (%6.3f,%6.3f,%6.3f) (%6.3f,%6.3f,%6.3f) %8.3f %8.3f\n", legName(static_cast<LegId>(l)),
+                    a.x, a.y, a.z, f.x, f.y, f.z, len, reach);
+    }
+    std::printf("\nsegment lengths per leg (coxa, trochanter, femur, tibia, tarsus):\n");
+    for (int l = 0; l < kLegCount; l += 2) {
+        const Leg& L = body.legs()[l];
+        std::printf("  %-8s", legName(static_cast<LegId>(l)));
+        for (const auto& j : L.joints) std::printf(" %.3f", j.segmentLength);
+        std::printf("\n");
+    }
+    const V3 ff = body.footPosition(LegId::FrontL), hf = body.footPosition(LegId::HindL);
+    std::printf("\nfront-to-hind foot spread 2L = %.3f mm, thorax height r = %.3f mm, L/r = %.2f\n",
+                ff.x - hf.x, body.root.position.z, 0.5f * (ff.x - hf.x) / body.root.position.z);
+
+    // The kinematic model's anatomy v2, for comparison.
+    KinematicFly kin;
+    std::printf("\n=== anatomy v2 (kinematic model) ===\n");
+    std::printf("thorax centre height %.3f mm, rest pose fit error %.4f mm\n\n", kin.standHeight(), kin.restError());
+    std::printf("%-9s %22s %22s %8s\n", "leg", "coxa attach (x,y,z)", "neutral foot (x,y,z)", "length");
+    for (int l = 0; l < kLegCount; ++l) {
+        const auto g = kin.geometry(l);
+        float len = 0;
+        for (float s : g.lengths) len += s;
+        std::printf("%-9s (%6.3f,%6.3f,%6.3f) (%6.3f,%6.3f,%6.3f) %8.3f\n", legName(static_cast<LegId>(l)),
+                    g.attach.x, g.attach.y, g.attach.z, g.neutralFoot.x, g.neutralFoot.y, g.neutralFoot.z, len);
+    }
+    std::printf("\nrest angles (rad): ThCpro ThCabd ThCrot CTr TrF FTi | TiTa\n");
+    for (int l = 0; l < kLegCount; l += 2) {
+        const auto& q = kin.angles(l);
+        std::printf("  %-8s", legName(static_cast<LegId>(l)));
+        for (float a : q) std::printf(" %6.3f", a);
+        std::printf("\n");
+    }
+    const auto gf = kin.geometry(0), gh = kin.geometry(4);
+    const float L = 0.5f * (gf.neutralFoot.x - gh.neutralFoot.x);
+    std::printf("\nfront-to-hind foot spread 2L = %.3f mm, L/r = %.2f (real flies 1-2)\n", 2 * L,
+                L / kin.standHeight());
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--pose") {
+        printPose();
+        return 0;
+    }
     if (argc >= 4) {
         report("custom", std::stof(argv[1]), std::stof(argv[2]), std::stof(argv[3]), true);
         return 0;

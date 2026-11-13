@@ -151,4 +151,66 @@ constexpr int kTarsomereCount = 5;
 constexpr float kTarsomereFrac[kTarsomereCount] = {0.40f, 0.17f, 0.14f,
                                                    0.12f, 0.17f};
 
+// --- legs, version 2 (kinematic model only, for now) ----------------------
+//
+// A review against the literature (docs/findings.md 14) found the leg
+// geometry above wrong in ways that make the legs hard to use:
+//   - The coxae were mounted on the flanks at mid-height. In the fly they
+//     articulate on the VENTRAL thorax, close to the midline, braced by the
+//     furcae (sternal apophyses).
+//   - The front coxa was the shortest. In the fly it is the longest and
+//     projects forward under the head from the reduced prothorax.
+//   - Each leg was the middle leg scaled by 0.88/1.0/1.12. In the fly the
+//     femurs of all three pairs are similar; the front tibia is shorter, and
+//     the hind leg is longer mainly in tibia and tarsus (Appendometer 2025).
+//   - Hinges were exactly perpendicular to their segments; in the fly hinge
+//     axes run between the joint's two condyles and are oblique. The knee
+//     bends one way only (roughly 0-170 degrees), and the thorax-coxa joint
+//     is a three-degree-of-freedom ball joint (landmark-based leg model,
+//     PMC11233710; NeuroMechFly).
+//
+// Provenance: the RELATIONSHIPS above are published. The NUMBERS below are
+// ESTIMATED to satisfy them -- no measured coordinates were used -- and are
+// the ones to replace if measurements are adopted later. Two numbers are
+// checked against measurements: middle-leg length 1.92 mm (measured
+// 1.89-2.18 mm, Chun et al. eLife 2021) and the standing foot spread to body
+// height ratio (L/r between 1 and 2, same source).
+namespace v2 {
+
+struct LegSpec {
+    V3 attach;        // coxa base, thorax frame (x forward, y left, z up), left side
+    V3 coxaDir;       // rest direction of the coxa, left side, unit
+    float coxa, trochanter, femur, tibia, tarsus;  // mm
+    V3 foot;          // neutral standing foot contact, body frame, left side
+    V3 tarsusDir;     // horizontal direction the stance tarsus lies along, left side
+};
+
+// Thorax centre stands this high in the neutral pose. Estimated.
+constexpr float kStandHeight = 0.60f;
+
+constexpr LegSpec kFront{
+    {0.36f, 0.11f, -0.26f}, {0.55f, 0.25f, -0.80f},
+    0.36f, 0.08f, 0.52f, 0.40f, 0.48f,
+    {0.95f, 0.60f, -kStandHeight}, {0.50f, 0.87f, 0.0f}};
+constexpr LegSpec kMiddle{
+    {0.02f, 0.15f, -0.32f}, {0.00f, 0.45f, -0.89f},
+    0.22f, 0.08f, 0.54f, 0.52f, 0.56f,
+    {0.05f, 0.95f, -kStandHeight}, {-0.10f, 0.99f, 0.0f}};
+constexpr LegSpec kHind{
+    {-0.24f, 0.14f, -0.30f}, {-0.30f, 0.40f, -0.87f},
+    0.24f, 0.08f, 0.55f, 0.60f, 0.62f,
+    {-0.80f, 0.80f, -kStandHeight}, {-0.55f, 0.83f, 0.0f}};
+
+// Slope of the first tarsomere down to the ground in stance; the rest of the
+// tarsus lies along the ground. Estimated from side views of standing flies.
+constexpr float kTarsusSlopeDeg = 35.0f;
+// Obliquity of the CTr and FTi hinge axes, rotated about the segment from the
+// perpendicular. Estimated: the published model gives oblique axes but no
+// numeric orientation in its text.
+constexpr float kHingeObliquityDeg = 15.0f;
+// Knee: one-way hinge, radians of flexion from straight.
+constexpr float kKneeMin = 0.05f, kKneeMax = 2.90f;
+
+}  // namespace v2
+
 }  // namespace fly::anat
