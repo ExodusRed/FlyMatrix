@@ -1,5 +1,8 @@
 #include "GL.h"
 
+// The browser build links WebGL directly; see GL.h.
+#ifndef __EMSCRIPTEN__
+
 #include <SDL3/SDL.h>
 
 namespace fly::gl {
@@ -21,3 +24,5 @@ bool load(const char** missing) {
 }
 
 }  // namespace fly::gl
+
+#endif  // __EMSCRIPTEN__

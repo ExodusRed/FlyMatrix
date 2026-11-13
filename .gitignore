@@ -7,3 +7,7 @@ out/
 *.user
 __pycache__/
 *.pyc
+
+# Web build output (emcmake cmake -B build-web); rebuilt from source.
+build-web/
+web/body/

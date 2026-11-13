@@ -9,10 +9,10 @@
 //
 // GL 1.1 calls (glClear, glDrawArrays, glEnable, ...) are linked directly from
 // opengl32 and are not listed here.
-
-#include <SDL3/SDL_opengl.h>
-
-namespace fly::gl {
+//
+// In the browser (Emscripten, WebGL 2 = OpenGL ES 3.0) every entry point is
+// linked directly, so the same names are simply pulled into fly::gl and
+// load() has nothing to resolve. Calling code is identical on both.
 
 // name, PFN type -- keep these two in sync; the macro generates the pointer,
 // the extern declaration and the load call from this one list.
@@ -45,6 +45,26 @@ namespace fly::gl {
     X(glUniform1f,                PFNGLUNIFORM1FPROC)              \
     X(glUniform3f,                PFNGLUNIFORM3FPROC)
 
+#ifdef __EMSCRIPTEN__
+
+#include <GLES3/gl3.h>
+
+namespace fly::gl {
+
+#define FLY_GL_USING(name, type) using ::name;
+FLY_GL_FUNCTIONS(FLY_GL_USING)
+#undef FLY_GL_USING
+
+inline bool load(const char** /*missing*/) { return true; }
+
+}  // namespace fly::gl
+
+#else
+
+#include <SDL3/SDL_opengl.h>
+
+namespace fly::gl {
+
 #define FLY_GL_DECLARE(name, type) extern type name;
 FLY_GL_FUNCTIONS(FLY_GL_DECLARE)
 #undef FLY_GL_DECLARE
@@ -54,3 +74,5 @@ FLY_GL_FUNCTIONS(FLY_GL_DECLARE)
 bool load(const char** missing);
 
 }  // namespace fly::gl
+
+#endif

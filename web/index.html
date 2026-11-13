@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlyMatrix</title>
+  <meta name="description" content="A simulated fruit fly: 176,571 neurons from the male-cns connectome, and a physics body that jumps when its giant fibre fires.">
+  <style>
+    :root {
+      --bg: #0d0d0f; --fg: #eaeaea; --muted: #8a8a92; --accent: #33d9f2; --red: #e5383b;
+      --card: #17171b; --border: #26262c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      display: flex; flex-direction: column; line-height: 1.5;
+    }
+    header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    header h1 { font-size: 1.1rem; margin: 0; letter-spacing: -0.01em; }
+    header h1 a { color: inherit; text-decoration: none; }
+    header .sub { color: var(--muted); font-size: 0.85rem; margin-right: auto; }
+    .tabs { display: flex; gap: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+    .tabs button { background: none; border: 0; color: var(--muted); padding: 6px 14px; border-radius: 6px; font: inherit; font-size: 0.9rem; cursor: pointer; }
+    .tabs button[aria-selected="true"] { background: #26262c; color: var(--fg); }
+
+    main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+    .view.active { display: flex; }
+    .stage { flex: 1; min-height: 0; position: relative; }
+    .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+    .hud {
+      position: absolute; top: 12px; left: 12px; pointer-events: none; font-size: 0.85rem;
+      background: #0d0d0fcc; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px;
+      font-variant-numeric: tabular-nums; max-width: calc(100% - 24px);
+    }
+    .hud b { color: var(--accent); }
+    .hud .stim { color: var(--red); font-weight: 600; }
+    .loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 16px; }
+
+    .controls { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+    .controls button, .controls select {
+      background: var(--card); color: var(--fg); border: 1px solid var(--border); border-radius: 7px;
+      padding: 6px 12px; font: inherit; font-size: 0.88rem; cursor: pointer;
+    }
+    .controls button.primary { background: var(--accent); color: #04191d; border-color: var(--accent); font-weight: 600; }
+    .controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    .controls input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+    .controls .hint { color: var(--muted); font-size: 0.8rem; margin-left: auto; }
+
+    details.about { border-top: 1px solid var(--border); padding: 10px 16px; font-size: 0.88rem; color: #c8c8ce; }
+    details.about summary { cursor: pointer; color: var(--fg); }
+    details.about p { max-width: 80ch; margin: 8px 0; }
+    details.about a { color: var(--accent); }
+    @media (max-width: 640px) { header .sub, .controls .hint { display: none; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="https://github.com/ExodusRed/FlyMatrix">FlyMatrix</a></h1>
+    <span class="sub">A fruit fly's nervous system and body, simulated</span>
+    <nav class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-view="brain">Brain</button>
+      <button role="tab" aria-selected="false" data-view="body">Body</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================= BRAIN ================= -->
+    <section class="view active" id="view-brain">
+      <div class="stage">
+        <canvas id="brain-canvas" aria-label="3D view of the fly nervous system"></canvas>
+        <div class="hud" id="brain-hud">Loading 176,571 neurons…</div>
+        <div class="loading" id="brain-loading">Loading the connectome recording…</div>
+      </div>
+      <div class="controls">
+        <button class="primary" id="brain-play">Pause</button>
+        <button id="brain-restart">Restart</button>
+        <input type="range" id="brain-scrub" min="0" max="150" value="0" aria-label="Time">
+        <select id="brain-speed" aria-label="Speed">
+          <option value="15">0.25×</option>
+          <option value="30" selected>0.5×</option>
+          <option value="60">1× (flyviz)</option>
+        </select>
+        <button id="brain-active" aria-pressed="false" title="Hide resting neurons">Active only</button>
+        <span class="hint">Drag to orbit · right-drag / shift-drag to pan · scroll or pinch to zoom</span>
+      </div>
+    </section>
+
+    <!-- ================= BODY ================= -->
+    <section class="view" id="view-body">
+      <div class="stage">
+        <canvas id="canvas" tabindex="0" aria-label="3D view of the fly body"></canvas>
+        <div class="hud" id="body-hud"></div>
+        <div class="loading" id="body-loading">Loading the physics engine (WebAssembly)…</div>
+      </div>
+      <div class="controls">
+        <button class="primary" id="body-jump">Fire giant fibre</button>
+        <button id="body-pause">Pause</button>
+        <select id="body-speed" aria-label="Speed">
+          <option value="0.25">0.25 ms of fly time / frame</option>
+          <option value="0.5">0.5 ms / frame</option>
+          <option value="1" selected>1 ms / frame (fastest)</option>
+        </select>
+        <button id="body-ground" aria-pressed="true">Floor</button>
+        <button id="body-walls" aria-pressed="false">Walls</button>
+        <button id="body-gravity" aria-pressed="true">Gravity</button>
+        <span class="hint">Drag to orbit · right-drag to pan · scroll to zoom</span>
+      </div>
+    </section>
+  </main>
+
+  <details class="about">
+    <summary>What am I looking at?</summary>
+    <p>
+      <b>Brain:</b> every one of the 176,571 neurons of an adult male <i>Drosophila</i>, at its real position in the
+      <a href="https://www.janelia.org/project-team/flyem" target="_blank" rel="noopener">Janelia male-cns connectome</a>
+      (~15 million connections). A leaky integrate-and-fire model was run on it with the giant fibre (DNp01, the
+      escape neuron) stimulated for 15 ms. The full network needs far more memory than a web page can use, so this is a
+      <b>recording</b> of that native run, replayed frame by frame with the same rendering as the desktop viewer.
+      Activity reaches the ventral nerve cord about 7 ms after the brain lights up: roughly four synaptic hops.
+    </p>
+    <p>
+      <b>Body:</b> this one is <b>live</b>. The fly's skeleton and physics (33 rigid bodies, 34 joints, contact
+      and friction) are the original C++ engine compiled to WebAssembly, running in your browser one millisecond at a
+      time. Its muscles are driven by the motor-neuron activity recorded from the same giant-fibre run, so the jump you see
+      emerges from the connectome rather than from an animation. It runs in slow motion because the solver is expensive:
+      even natively, one millisecond of fly time costs tens of milliseconds of computation.
+    </p>
+    <p>
+      <b>A caveat worth knowing:</b> the takeoff is very sensitive to floating-point rounding. With bit-identical muscle
+      input, the same C++ gives a peak of 2.9 mm in an optimised native build, 4.5 mm in a strict native build and
+      7.4 mm here. The nervous system and the muscle drive are deterministic; the difference arises in the contact and
+      joint solver during the jump, which makes it an honest open problem of this model rather than a property of the fly.
+    </p>
+  </details>
+
+  <script type="module">
+    import { parseBrain, BrainViewer } from './brain.js';
+
+    let brain = null;
+    let bodyStarted = false, bodyReady = false, bodyPaused = false;
+
+    // ---------------------------------------------------------------- tabs
+    const tabs = document.querySelectorAll('.tabs button');
+    const show = (name) => {
+      tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.view === name)));
+      document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
+      if (brain) brain.visible = name === 'brain';
+      if (name === 'body') startBody();
+      else if (window.Module?.ccall && bodyReady) Module.ccall('fly_pause', null, ['number'], [1]);
+      history.replaceState(null, '', '#' + name);
+    };
+    tabs.forEach((t) => t.addEventListener('click', () => show(t.dataset.view)));
+
+    // ---------------------------------------------------------------- brain
+    const hud = document.getElementById('brain-hud');
+    const scrub = document.getElementById('brain-scrub');
+    const playBtn = document.getElementById('brain-play');
+    try {
+      const res = await fetch('data/brain.bin');
+      if (!res.ok) throw new Error('could not load data/brain.bin (' + res.status + ')');
+      const rec = parseBrain(await res.arrayBuffer());
+      scrub.max = rec.frames;
+      brain = new BrainViewer(document.getElementById('brain-canvas'), rec, (s) => {
+        hud.innerHTML = `t = <b>${s.timeMs.toFixed(1)} ms</b> · ${s.active.toLocaleString()} neurons fired in the last ${s.windowMs.toFixed(1)} ms` +
+          (s.stimulating ? ' · <span class="stim">STIMULUS</span>' : '');
+        if (!scrub.matches(':active')) scrub.value = s.frame;
+      });
+      document.getElementById('brain-loading').remove();
+      brain.seek(0);
+    } catch (e) {
+      document.getElementById('brain-loading').textContent = 'Could not start the brain view: ' + e.message;
+    }
+    playBtn.onclick = () => { brain.playing = !brain.playing; playBtn.textContent = brain.playing ? 'Pause' : 'Play'; };
+    document.getElementById('brain-restart').onclick = () => { brain.restart(); playBtn.textContent = 'Pause'; };
+    scrub.oninput = () => { brain.playing = false; playBtn.textContent = 'Play'; brain.seek(Number(scrub.value)); };
+    document.getElementById('brain-speed').onchange = (e) => (brain.fps = Number(e.target.value));
+    const activeBtn = document.getElementById('brain-active');
+    activeBtn.onclick = () => {
+      const on = activeBtn.getAttribute('aria-pressed') !== 'true';
+      activeBtn.setAttribute('aria-pressed', String(on));
+      brain.dimAlpha = on ? 0 : 0.3;
+    };
+
+    // ---------------------------------------------------------------- body (WebAssembly, loaded on demand)
+    function startBody() {
+      if (bodyStarted) {
+        if (bodyReady) Module.ccall('fly_pause', null, ['number'], [bodyPaused ? 1 : 0]);
+        return;
+      }
+      bodyStarted = true;
+      window.Module = {
+        canvas: document.getElementById('canvas'),
+        locateFile: (f) => 'body/' + f,
+        // Download the whole .wasm, then compile it. Emscripten's default
+        // streaming compile was seen to hang indefinitely in some Chromium
+        // builds; at under 1 MB the non-streaming path costs almost nothing.
+        instantiateWasm(imports, done) {
+          fetch('body/flybody.wasm')
+            .then((r) => { if (!r.ok) throw new Error('flybody.wasm: HTTP ' + r.status); return r.arrayBuffer(); })
+            .then((bytes) => WebAssembly.instantiate(bytes, imports))
+            .then((result) => done(result.instance, result.module))
+            .catch((e) => Module.onFlyError(e.message));
+          return {};
+        },
+        onFlyReady() {
+          bodyReady = true;
+          document.getElementById('body-loading').remove();
+          setInterval(updateBodyHud, 100);
+        },
+        onFlyError(msg) { document.getElementById('body-loading').textContent = 'The physics engine stopped: ' + msg; },
+        print: (t) => console.log(t),
+        printErr: (t) => console.warn(t),
+      };
+      const s = document.createElement('script');
+      s.src = 'body/flybody.js';
+      s.onerror = () => (document.getElementById('body-loading').textContent = 'Could not load the physics engine.');
+      document.body.appendChild(s);
+    }
+    const bodyHud = document.getElementById('body-hud');
+    function updateBodyHud() {
+      const s = JSON.parse(Module.ccall('fly_status', 'string', [], []));
+      const phase = s.playing ? (s.t < 20 ? '<span class="stim">GIANT FIBRE FIRING</span>' : 'muscles driven by recorded motor neurons')
+                              : 'recording finished, the fly is on its own';
+      bodyHud.innerHTML = `t = <b>${s.t} ms</b> · height <b>${s.height.toFixed(2)} mm</b> · peak ${s.peak.toFixed(2)} mm<br>${phase}`;
+      document.getElementById('body-ground').setAttribute('aria-pressed', String(s.ground));
+      document.getElementById('body-walls').setAttribute('aria-pressed', String(s.walls));
+      document.getElementById('body-gravity').setAttribute('aria-pressed', String(s.gravity));
+    }
+    const call = (name, ...args) => bodyReady && Module.ccall(name, null, args.map(() => 'number'), args);
+    document.getElementById('body-jump').onclick = () => { call('fly_jump'); bodyPaused = false; call('fly_pause', 0); document.getElementById('body-pause').textContent = 'Pause'; };
+    document.getElementById('body-pause').onclick = (e) => { bodyPaused = !bodyPaused; call('fly_pause', bodyPaused ? 1 : 0); e.target.textContent = bodyPaused ? 'Resume' : 'Pause'; };
+    document.getElementById('body-speed').onchange = (e) => call('fly_speed', Number(e.target.value));
+    document.getElementById('body-ground').onclick = () => call('fly_toggle', 0);
+    document.getElementById('body-walls').onclick = () => call('fly_toggle', 1);
+    document.getElementById('body-gravity').onclick = () => call('fly_toggle', 2);
+
+    if (location.hash === '#body') show('body');
+  </script>
+</body>
+</html>

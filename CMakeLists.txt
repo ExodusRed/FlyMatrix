@@ -32,6 +32,50 @@ add_library(flycore STATIC
 )
 target_include_directories(flycore PUBLIC src)
 
+# ---------------------------------------------------------------------------
+# Browser build (Emscripten): only the body, running live as WebAssembly on
+# drive recorded by flyrecord. Configure with
+#   emcmake cmake -S . -B build-web && cmake --build build-web
+# See web/README.md.
+# ---------------------------------------------------------------------------
+if(EMSCRIPTEN)
+  set(FLYBRAIN_SDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Library/SDL"
+      CACHE PATH "SDL3 source directory")
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${FLYBRAIN_SDL_DIR}" "${CMAKE_BINARY_DIR}/SDL" EXCLUDE_FROM_ALL)
+  # Our -Wall -Wextra is for our code; SDL's own warnings are not ours to fix.
+  target_compile_options(SDL3-static PRIVATE -w)
+
+  # The engine reports errors with exceptions; native WebAssembly exception
+  # handling keeps that working at almost no cost.
+  target_compile_options(flycore PUBLIC -fwasm-exceptions)
+  target_link_options(flycore PUBLIC -fwasm-exceptions)
+
+  set(FLY_WEB_DATA "${CMAKE_CURRENT_SOURCE_DIR}/web/data")
+  add_executable(flybody_web
+    src/web/body_web.cpp
+    src/engine/Mesh.cpp
+  )
+  target_link_libraries(flybody_web PRIVATE flycore SDL3::SDL3-static)
+  # Straight into web/body/, so web/ is a complete site that can be served as-is.
+  set_target_properties(flybody_web PROPERTIES OUTPUT_NAME "flybody" SUFFIX ".js"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/web/body")
+  target_link_options(flybody_web PRIVATE
+    -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2
+    -sALLOW_MEMORY_GROWTH=1
+    -sENVIRONMENT=web
+    -sEXPORTED_FUNCTIONS=_main,_fly_jump,_fly_pause,_fly_speed,_fly_toggle,_fly_status,_fly_selftest
+    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
+    "--preload-file=${FLY_WEB_DATA}/drive.bin@/data/drive.bin"
+    "--preload-file=${FLY_WEB_DATA}/motor_map.tsv@/data/motor_map.tsv"
+  )
+  return()
+endif()
+
 # Mechanics-only harness. Links flycore but touches no connectome data, so it
 # runs in milliseconds and isolates the body from the nervous system.
 add_executable(flyphys src/phys_test.cpp)
@@ -44,6 +88,13 @@ target_link_libraries(flysim PRIVATE flycore)
 
 # Run from the project root so the default --data path resolves.
 set_target_properties(flysim PROPERTIES
+  VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+
+# Records runs for the web build (see web/README.md). Native only: it needs
+# the full connectome, which is exactly what the browser cannot load.
+add_executable(flyrecord src/web/record_main.cpp)
+target_link_libraries(flyrecord PRIVATE flycore)
+set_target_properties(flyrecord PROPERTIES
   VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------

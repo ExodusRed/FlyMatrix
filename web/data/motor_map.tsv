@@ -1,0 +1,335 @@
+leg	joint	direction	neuron_index	type	size
+front_L	CTr	extend	151260	Sternotrochanter MN	2744661720
+front_L	CTr	extend	151749	Sternotrochanter MN	2940650243
+front_L	CTr	extend	151898	Tergotr. MN	2257329678
+front_L	CTr	extend	152428	Tergotr. MN	2353177645
+front_L	CTr	extend	152562	Tr extensor MN	3601330953
+front_L	CTr	extend	153401	Tergotr. MN	1674396496
+front_L	CTr	extend	154439	Tergotr. MN	1739698915
+front_L	CTr	extend	156255	Tr extensor MN	2026825838
+front_L	CTr	flex	158522	Tr flexor MN	1456858700
+front_L	CTr	flex	161585	Tr flexor MN	1540222400
+front_L	CTr	flex	164197	Tr flexor MN	1177940517
+front_L	CTr	flex	165346	Acc. tr flexor MN	1015108707
+front_L	CTr	flex	165764	Tr flexor MN	1344564968
+front_L	CTr	flex	165791	Tr flexor MN	865882089
+front_L	CTr	flex	166699	Tr flexor MN	1332019703
+front_L	CTr	flex	170232	Acc. tr flexor MN	671967125
+front_L	CTr	flex	170624	Acc. tr flexor MN	443468747
+front_L	CTr	flex	176101	Tr flexor MN	302491788
+front_L	CTr	flex	176129	Tr flexor MN	679911646
+front_L	FTi	extend	150470	Ti extensor MN	3099196743
+front_L	FTi	extend	162221	Ti extensor MN	4262102049
+front_L	FTi	flex	155151	Acc. ti flexor MN	2033395646
+front_L	FTi	flex	155626	Ti flexor MN	3219549902
+front_L	FTi	flex	157937	Ti flexor MN	2070827841
+front_L	FTi	flex	162154	Acc. ti flexor MN	1163930731
+front_L	FTi	flex	162853	Acc. ti flexor MN	781991310
+front_L	FTi	flex	162978	Acc. ti flexor MN	933359238
+front_L	FTi	flex	163533	Acc. ti flexor MN	1244031447
+front_L	FTi	flex	164021	Ti flexor MN	1577817189
+front_L	FTi	flex	164673	Ti flexor MN	1624902897
+front_L	FTi	flex	164880	Acc. ti flexor MN	1465242024
+front_L	FTi	flex	166183	Acc. ti flexor MN	840066052
+front_L	FTi	flex	167527	Acc. ti flexor MN	730086437
+front_L	FTi	flex	168079	Acc. ti flexor MN	1522011585
+front_L	FTi	flex	170297	Ti flexor MN	1531056849
+front_L	FTi	flex	175817	Acc. ti flexor MN	1100475095
+front_L	ThC	protract	150047	Tergopleural/Pleural promotor MN	4231349936
+front_L	ThC	protract	150865	Tergopleural/Pleural promotor MN	3423082014
+front_L	ThC	protract	155432	Sternal anterior rotator MN	2802671512
+front_L	ThC	protract	155726	Tergopleural/Pleural promotor MN	1964552660
+front_L	ThC	protract	171397	Sternal anterior rotator MN	3791406559
+front_L	ThC	protract	171930	Tergopleural/Pleural promotor MN	1372968055
+front_L	ThC	retract	151433	Sternal posterior rotator MN	2032252614
+front_L	ThC	retract	151868	Pleural remotor/abductor MN	3126159693
+front_L	ThC	retract	152863	Pleural remotor/abductor MN	2876021671
+front_L	ThC	retract	153709	Sternal posterior rotator MN	1932368917
+front_L	ThC	retract	156867	Sternal posterior rotator MN	1746356348
+front_L	ThC	retract	160795	Sternal adductor MN	1322411882
+front_L	ThC	retract	175914	Sternal posterior rotator MN	847806240
+front_L	TiTa	extend	158445	Ta levator MN	683982835
+front_L	TiTa	extend	175813	Ta levator MN	1193120156
+front_L	TiTa	flex	154075	ltm2-femur MN	1781769466
+front_L	TiTa	flex	163780	Ta depressor MN	549948134
+front_L	TiTa	flex	164288	ltm1-tibia MN	1805891438
+front_L	TiTa	flex	164622	Ta depressor MN	647324488
+front_L	TiTa	flex	165517	ltm1-tibia MN	613232946
+front_L	TiTa	flex	165525	ltm MN	406659439
+front_L	TiTa	flex	165564	ltm MN	1705530345
+front_L	TiTa	flex	170426	ltm MN	429915216
+front_L	TiTa	flex	170690	ltm MN	843817045
+front_L	TiTa	flex	175934	Ta depressor MN	313688083
+front_L	TiTa	flex	175979	ltm2-femur MN	1755109617
+front_L	TiTa	flex	175987	Ta depressor MN	328647257
+front_L	TiTa	flex	176058	Ta depressor MN	764612657
+front_L	TrF	flex	153782	Fe reductor MN	1758165824
+front_L	TrF	flex	154322	Fe reductor MN	1818750467
+front_L	TrF	flex	159689	Fe reductor MN	1133266097
+front_L	TrF	flex	161332	Fe reductor MN	779665045
+front_R	CTr	extend	150792	Sternotrochanter MN	3643178160
+front_R	CTr	extend	152779	Sternotrochanter MN	2911425587
+front_R	CTr	extend	153722	Tergotr. MN	1225269256
+front_R	CTr	extend	163577	Tergotr. MN	1831800415
+front_R	CTr	extend	164436	Tr extensor MN	1429933652
+front_R	CTr	extend	167320	Tr extensor MN	2698213996
+front_R	CTr	extend	170195	Tergotr. MN	1769864020
+front_R	CTr	extend	171555	Tergotr. MN	2071889710
+front_R	CTr	flex	156228	Acc. tr flexor MN	620962601
+front_R	CTr	flex	163133	Tr flexor MN	413460510
+front_R	CTr	flex	163771	Tr flexor MN	1468916877
+front_R	CTr	flex	164374	Tr flexor MN	623139608
+front_R	CTr	flex	164963	Tr flexor MN	1160318770
+front_R	CTr	flex	165139	Tr flexor MN	1558827449
+front_R	CTr	flex	167978	Tr flexor MN	940662796
+front_R	CTr	flex	171188	Tr flexor MN	1249080738
+front_R	CTr	flex	175909	Acc. tr flexor MN	571577928
+front_R	CTr	flex	175918	Acc. tr flexor MN	972555064
+front_R	FTi	extend	153234	Ti extensor MN	2971364570
+front_R	FTi	extend	162459	Ti extensor MN	3310887421
+front_R	FTi	flex	158089	Ti flexor MN	2213536049
+front_R	FTi	flex	163684	Acc. ti flexor MN	2115745161
+front_R	FTi	flex	165434	Ti flexor MN	1456365037
+front_R	FTi	flex	166436	Ti flexor MN	1785048162
+front_R	FTi	flex	167187	Acc. ti flexor MN	1024171803
+front_R	FTi	flex	167316	Acc. ti flexor MN	1087683559
+front_R	FTi	flex	170253	Acc. ti flexor MN	1002988656
+front_R	FTi	flex	175765	Acc. ti flexor MN	848492078
+front_R	FTi	flex	175777	Ti flexor MN	1392040600
+front_R	FTi	flex	175806	Acc. ti flexor MN	1374354496
+front_R	FTi	flex	175821	Acc. ti flexor MN	539996483
+front_R	FTi	flex	175842	Acc. ti flexor MN	534647094
+front_R	FTi	flex	175861	Ti flexor MN	1789755963
+front_R	FTi	flex	175892	Acc. ti flexor MN	1299454285
+front_R	ThC	protract	151095	Sternal anterior rotator MN	4660923850
+front_R	ThC	protract	151369	Tergopleural/Pleural promotor MN	4511743828
+front_R	ThC	protract	151436	Sternal anterior rotator MN	3770430985
+front_R	ThC	protract	151549	Tergopleural/Pleural promotor MN	5023241988
+front_R	ThC	protract	154442	Tergopleural/Pleural promotor MN	2604990671
+front_R	ThC	protract	158441	Tergopleural/Pleural promotor MN	1866569375
+front_R	ThC	retract	152489	Pleural remotor/abductor MN	3599267800
+front_R	ThC	retract	154079	Pleural remotor/abductor MN	2974984996
+front_R	ThC	retract	154162	Sternal posterior rotator MN	2094069719
+front_R	ThC	retract	156351	Sternal posterior rotator MN	1421047367
+front_R	ThC	retract	162595	Sternal adductor MN	1854103655
+front_R	TiTa	extend	163490	Ta levator MN	625046695
+front_R	TiTa	extend	164955	Ta levator MN	800010937
+front_R	TiTa	extend	165207	Ta levator MN	461236068
+front_R	TiTa	flex	166219	Ta depressor MN	815787245
+front_R	TiTa	flex	166862	ltm2-femur MN	2451915511
+front_R	TiTa	flex	167497	ltm MN	1852913890
+front_R	TiTa	flex	171544	ltm MN	411786131
+front_R	TiTa	flex	175770	ltm MN	1118013578
+front_R	TiTa	flex	175772	ltm MN	325387289
+front_R	TiTa	flex	175888	Ta depressor MN	350472908
+front_R	TiTa	flex	175889	ltm2-femur MN	1849554006
+front_R	TiTa	flex	175930	Ta depressor MN	320270083
+front_R	TiTa	flex	176015	Ta depressor MN	338186420
+front_R	TiTa	flex	176368	ltm1-tibia MN	1910110359
+front_R	TrF	flex	152884	Fe reductor MN	1228573583
+front_R	TrF	flex	155411	Fe reductor MN	2126872262
+front_R	TrF	flex	159324	Fe reductor MN	2384684170
+front_R	TrF	flex	160861	Fe reductor MN	1265363161
+front_R	TrF	flex	163745	Fe reductor MN	259371802
+front_R	TrF	flex	167278	Fe reductor MN	242991147
+hind_L	CTr	extend	150371	Sternotrochanter MN	4519690887
+hind_L	CTr	extend	150632	Sternotrochanter MN	3304825885
+hind_L	CTr	extend	153444	Tergotr. MN	1623585845
+hind_L	CTr	extend	166706	Sternotrochanter MN	1962644630
+hind_L	CTr	extend	167355	Tr extensor MN	2196761802
+hind_L	CTr	flex	157678	Acc. tr flexor MN	613327594
+hind_L	CTr	flex	165300	Acc. tr flexor MN	1391149675
+hind_L	CTr	flex	167607	Acc. tr flexor MN	982283198
+hind_L	CTr	flex	175783	Acc. tr flexor MN	851666676
+hind_L	CTr	flex	175831	Acc. tr flexor MN	1107871546
+hind_L	CTr	flex	175864	Tr flexor MN	337385691
+hind_L	CTr	flex	175885	Acc. tr flexor MN	850590787
+hind_L	CTr	flex	176002	Acc. tr flexor MN	586070311
+hind_L	CTr	flex	176082	Acc. tr flexor MN	757683641
+hind_L	FTi	extend	150463	Ti extensor MN	3898352192
+hind_L	FTi	extend	160377	Ti extensor MN	3578450784
+hind_L	FTi	flex	152353	Ti flexor MN	4076707318
+hind_L	FTi	flex	153767	Ti flexor MN	2889681615
+hind_L	FTi	flex	163600	Acc. ti flexor MN	1283701764
+hind_L	FTi	flex	164553	Ti flexor MN	2156926189
+hind_L	FTi	flex	165708	Ti flexor MN	1856315457
+hind_L	FTi	flex	166835	Acc. ti flexor MN	1612699607
+hind_L	FTi	flex	167380	Acc. ti flexor MN	1076373460
+hind_L	FTi	flex	169886	Ti flexor MN	1619875532
+hind_L	FTi	flex	171730	Ti flexor MN	1183181096
+hind_L	FTi	flex	171943	Acc. ti flexor MN	764825380
+hind_L	FTi	flex	175763	Acc. ti flexor MN	1573971082
+hind_L	FTi	flex	175804	Ti flexor MN	1835333846
+hind_L	FTi	flex	175811	Ti flexor MN	1378748972
+hind_L	FTi	flex	175820	Acc. ti flexor MN	382069366
+hind_L	FTi	flex	175849	Ti flexor MN	1213116837
+hind_L	FTi	flex	175883	Acc. ti flexor MN	530167117
+hind_L	FTi	flex	175891	Acc. ti flexor MN	1246241794
+hind_L	ThC	protract	151160	Sternal anterior rotator MN	3673638332
+hind_L	ThC	protract	151650	Sternal anterior rotator MN	2778576507
+hind_L	ThC	retract	150133	Pleural remotor/abductor MN	3530950646
+hind_L	ThC	retract	151112	Sternal posterior rotator MN	2620822145
+hind_L	ThC	retract	151282	Sternal posterior rotator MN	2823941946
+hind_L	ThC	retract	152208	Sternal posterior rotator MN	3105593046
+hind_L	ThC	retract	164203	Sternal posterior rotator MN	906581580
+hind_L	ThC	retract	167750	Pleural remotor/abductor MN	1210216556
+hind_L	ThC	retract	168437	Sternal adductor MN	898857429
+hind_L	TiTa	flex	162327	ltm2-femur MN	2111332938
+hind_L	TiTa	flex	165809	ltm MN	416265743
+hind_L	TiTa	flex	165935	ltm MN	782796177
+hind_L	TiTa	flex	167486	ltm2-femur MN	1781475928
+hind_L	TiTa	flex	167488	ltm1-tibia MN	1991096701
+hind_L	TiTa	flex	167593	ltm MN	739363396
+hind_L	TiTa	flex	170978	ltm1-tibia MN	2022259800
+hind_L	TiTa	flex	175803	ltm MN	1124300124
+hind_L	TrF	flex	150433	Fe reductor MN	4333645346
+hind_L	TrF	flex	165037	Fe reductor MN	506416326
+hind_R	CTr	extend	150800	Sternotrochanter MN	3415565535
+hind_R	CTr	extend	150846	Sternotrochanter MN	4127425037
+hind_R	CTr	extend	151026	Sternotrochanter MN	3324325511
+hind_R	CTr	extend	156706	Tr extensor MN	2434002947
+hind_R	CTr	extend	168955	Tr extensor MN	1787456511
+hind_R	CTr	extend	169016	Tergotr. MN	2327716970
+hind_R	CTr	flex	151287	Tr flexor MN	1180730376
+hind_R	CTr	flex	156030	Tr flexor MN	1433967706
+hind_R	CTr	flex	162667	Acc. tr flexor MN	886219550
+hind_R	CTr	flex	168928	Acc. tr flexor MN	810650193
+hind_R	CTr	flex	169051	Tr flexor MN	2349169375
+hind_R	CTr	flex	171212	Acc. tr flexor MN	614737797
+hind_R	CTr	flex	175810	Tr flexor MN	1266930201
+hind_R	CTr	flex	175812	Acc. tr flexor MN	903522636
+hind_R	CTr	flex	176036	Tr flexor MN	721858724
+hind_R	FTi	extend	150122	Ti extensor MN	4818477050
+hind_R	FTi	extend	157954	Ti extensor MN	2636046051
+hind_R	FTi	flex	151225	Acc. ti flexor MN	1089544969
+hind_R	FTi	flex	152294	Ti flexor MN	3435789193
+hind_R	FTi	flex	156906	Ti flexor MN	2029248072
+hind_R	FTi	flex	160909	Acc. ti flexor MN	963563311
+hind_R	FTi	flex	165858	Ti flexor MN	1439015656
+hind_R	FTi	flex	166541	Ti flexor MN	1727392881
+hind_R	FTi	flex	167348	Ti flexor MN	1095178619
+hind_R	FTi	flex	170381	Ti flexor MN	1396562405
+hind_R	FTi	flex	170406	Acc. ti flexor MN	1135997036
+hind_R	FTi	flex	175768	Ti flexor MN	1240120595
+hind_R	FTi	flex	175778	Acc. ti flexor MN	1038378032
+hind_R	FTi	flex	175845	Acc. ti flexor MN	375125015
+hind_R	FTi	flex	175870	Acc. ti flexor MN	391699685
+hind_R	FTi	flex	175907	Ti flexor MN	1322353545
+hind_R	FTi	flex	175951	Acc. ti flexor MN	1405427764
+hind_R	FTi	flex	176390	Acc. ti flexor MN	314357372
+hind_R	ThC	protract	150231	Sternal anterior rotator MN	2424760445
+hind_R	ThC	protract	169140	Sternal anterior rotator MN	2930868993
+hind_R	ThC	retract	150210	Pleural remotor/abductor MN	1883706092
+hind_R	ThC	retract	150411	Pleural remotor/abductor MN	4716526486
+hind_R	ThC	retract	156212	Sternal adductor MN	873377649
+hind_R	ThC	retract	168231	Sternal posterior rotator MN	2722439203
+hind_R	ThC	retract	168232	Sternal posterior rotator MN	2852594194
+hind_R	ThC	retract	169365	Sternal posterior rotator MN	2315898152
+hind_R	ThC	retract	175954	Sternal posterior rotator MN	1026806757
+hind_R	TiTa	flex	153623	ltm1-tibia MN	1909627308
+hind_R	TiTa	flex	162044	ltm MN	563904696
+hind_R	TiTa	flex	165383	ltm2-femur MN	2133355432
+hind_R	TiTa	flex	171206	ltm1-tibia MN	1916744800
+hind_R	TiTa	flex	175805	ltm MN	628801084
+hind_R	TiTa	flex	175851	ltm2-femur MN	1909556971
+hind_R	TiTa	flex	175871	ltm MN	558182876
+hind_R	TrF	flex	151267	Fe reductor MN	919442687
+hind_R	TrF	flex	167973	Fe reductor MN	3670014461
+middle_L	CTr	extend	151789	Sternotrochanter MN	4055587561
+middle_L	CTr	extend	153544	TTMn	10156209474
+middle_L	CTr	extend	154217	Tr extensor MN	2624924123
+middle_L	CTr	extend	161016	Tergotr. MN	1943935712
+middle_L	CTr	extend	166969	STTMm	2597563024
+middle_L	CTr	extend	168565	Sternotrochanter MN	4364300514
+middle_L	CTr	extend	170016	Tr extensor MN	1973671315
+middle_L	CTr	extend	171543	STTMm	2483149387
+middle_L	CTr	flex	150442	Tr flexor MN	3037779429
+middle_L	CTr	flex	151661	Tr flexor MN	3079169294
+middle_L	CTr	flex	152883	Tr flexor MN	2320681687
+middle_L	CTr	flex	165372	Acc. tr flexor MN	403445056
+middle_L	CTr	flex	168037	Tr flexor MN	2278819460
+middle_L	CTr	flex	168038	Tr flexor MN	3052723733
+middle_L	CTr	flex	168207	Tr flexor MN	384637042
+middle_L	CTr	flex	171667	Acc. tr flexor MN	597177401
+middle_L	CTr	flex	175991	Tr flexor MN	2831525453
+middle_L	FTi	extend	150675	Ti extensor MN	3869719891
+middle_L	FTi	extend	150911	Ti extensor MN	3818016233
+middle_L	FTi	flex	151705	Ti flexor MN	3348865291
+middle_L	FTi	flex	157732	Acc. ti flexor MN	2104004249
+middle_L	FTi	flex	164144	Ti flexor MN	1376338337
+middle_L	FTi	flex	164811	Acc. ti flexor MN	641197054
+middle_L	FTi	flex	165870	Ti flexor MN	1310037322
+middle_L	FTi	flex	165925	Ti flexor MN	1467222085
+middle_L	FTi	flex	166179	Acc. ti flexor MN	1024986570
+middle_L	FTi	flex	166923	Acc. ti flexor MN	1147096806
+middle_L	FTi	flex	169636	Acc. ti flexor MN	1267476869
+middle_L	FTi	flex	171665	Ti flexor MN	2711811766
+middle_L	FTi	flex	176098	Acc. ti flexor MN	426620088
+middle_L	ThC	protract	167150	Sternal anterior rotator MN	4687528185
+middle_L	ThC	protract	168243	Sternal anterior rotator MN	4248815656
+middle_L	ThC	retract	150400	Pleural remotor/abductor MN	1878158095
+middle_L	ThC	retract	151322	Sternal posterior rotator MN	3770177551
+middle_L	ThC	retract	152418	Sternal posterior rotator MN	3110822525
+middle_L	ThC	retract	152784	Sternal posterior rotator MN	2331425657
+middle_L	ThC	retract	162714	Sternal adductor MN	753440720
+middle_L	ThC	retract	167818	Pleural remotor/abductor MN	2832789832
+middle_L	ThC	retract	168872	Pleural remotor/abductor MN	2234885348
+middle_L	ThC	retract	176055	Sternal posterior rotator MN	1407763711
+middle_L	TiTa	flex	156316	ltm2-femur MN	1580549886
+middle_L	TiTa	flex	160890	ltm MN	435745290
+middle_L	TiTa	flex	166031	ltm MN	913146279
+middle_L	TiTa	flex	166210	ltm MN	1581092244
+middle_L	TiTa	flex	166406	ltm2-femur MN	1276876606
+middle_L	TiTa	flex	169428	ltm1-tibia MN	1517094995
+middle_L	TrF	flex	153045	Fe reductor MN	2149415702
+middle_L	TrF	flex	165170	Fe reductor MN	253152743
+middle_L	TrF	flex	175978	Fe reductor MN	207656386
+middle_R	CTr	extend	150111	TTMn	14551198550
+middle_R	CTr	extend	151039	STTMm	3116246494
+middle_R	CTr	extend	152129	Sternotrochanter MN	2966794974
+middle_R	CTr	extend	154818	Tergotr. MN	1870257362
+middle_R	CTr	extend	161932	Tr extensor MN	1805085291
+middle_R	CTr	extend	165953	STTMm	3126192068
+middle_R	CTr	extend	167344	Tr extensor MN	1640451015
+middle_R	CTr	extend	167476	Sternotrochanter MN	6769864809
+middle_R	CTr	flex	150777	Tr flexor MN	4073059497
+middle_R	CTr	flex	150778	Tr flexor MN	4443307702
+middle_R	CTr	flex	158586	Acc. tr flexor MN	915528798
+middle_R	CTr	flex	163796	Tr flexor MN	1508571371
+middle_R	CTr	flex	164592	Tr flexor MN	553182670
+middle_R	CTr	flex	165975	Tr flexor MN	3529411081
+middle_R	CTr	flex	167528	Acc. tr flexor MN	368998394
+middle_R	CTr	flex	170357	Tr flexor MN	1696969598
+middle_R	CTr	flex	171542	Tr flexor MN	1336596185
+middle_R	FTi	extend	166930	Ti extensor MN	3910765303
+middle_R	FTi	extend	171687	Ti extensor MN	2794809306
+middle_R	FTi	flex	153348	Ti flexor MN	1953957619
+middle_R	FTi	flex	153838	Ti flexor MN	2169489069
+middle_R	FTi	flex	154298	Acc. ti flexor MN	810023597
+middle_R	FTi	flex	160038	Acc. ti flexor MN	834168025
+middle_R	FTi	flex	162859	Ti flexor MN	1646361745
+middle_R	FTi	flex	165505	Ti flexor MN	1289326048
+middle_R	FTi	flex	168100	Ti flexor MN	1422594360
+middle_R	FTi	flex	168810	Acc. ti flexor MN	1681412248
+middle_R	FTi	flex	169548	Acc. ti flexor MN	1465071020
+middle_R	FTi	flex	170096	Acc. ti flexor MN	1681507738
+middle_R	FTi	flex	176211	Acc. ti flexor MN	1316301809
+middle_R	ThC	protract	151360	Sternal anterior rotator MN	3794818127
+middle_R	ThC	protract	151457	Sternal anterior rotator MN	4022069281
+middle_R	ThC	retract	150573	Pleural remotor/abductor MN	2215938262
+middle_R	ThC	retract	150709	Sternal posterior rotator MN	2767783363
+middle_R	ThC	retract	151318	Sternal posterior rotator MN	3262661451
+middle_R	ThC	retract	151875	Sternal posterior rotator MN	2352763239
+middle_R	ThC	retract	152627	Pleural remotor/abductor MN	2022345831
+middle_R	ThC	retract	164502	Sternal posterior rotator MN	1194954483
+middle_R	ThC	retract	167897	Pleural remotor/abductor MN	2130110859
+middle_R	ThC	retract	170137	Sternal adductor MN	1253546530
+middle_R	TiTa	flex	152648	ltm1-tibia MN	1587490668
+middle_R	TiTa	flex	160311	ltm MN	857618753
+middle_R	TiTa	flex	166097	ltm MN	1381743697
+middle_R	TiTa	flex	167450	ltm2-femur MN	1310271592
+middle_R	TiTa	flex	168887	ltm MN	378643753
+middle_R	TiTa	flex	169836	ltm2-femur MN	1281071590
+middle_R	TrF	flex	165462	Fe reductor MN	278995245
+middle_R	TrF	flex	165757	Fe reductor MN	253438768
+middle_R	TrF	flex	168769	Fe reductor MN	1232903931

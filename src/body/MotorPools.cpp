@@ -269,3 +269,23 @@ void MotorPools::applyToSkeleton(FlyBody& body) const {
 }
 
 }  // namespace fly
+
+namespace fly {
+
+std::size_t MotorPools::unitCount() const {
+    std::size_t n = 0;
+    for (const auto& m : muscles_) n += m.units.size();
+    return n;
+}
+
+void MotorPools::setActivations(std::span<const float> activations) {
+    std::size_t k = 0;
+    for (auto& m : muscles_) {
+        for (auto& u : m.units) {
+            u.activation = k < activations.size() ? activations[k] : 0.0f;
+            ++k;
+        }
+    }
+}
+
+}  // namespace fly
