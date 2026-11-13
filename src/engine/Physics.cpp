@@ -15,7 +15,25 @@ V3 perpendicular(const V3& n) {
     return normalise(cross(n, a));
 }
 
+// RigidBody::applyImpulse / applyPseudoImpulse with the world-space inverse
+// inertia passed in instead of recomputed from the orientation on every call.
+// Same arithmetic, in the same order; only valid while the orientation is the
+// one `invI` was computed from, i.e. inside one solver sweep.
+inline void applyImpulseWith(RigidBody& b, const M3& invI, const V3& impulse, const V3& r) {
+    b.velocity += impulse * b.invMass;
+    b.angularVelocity += invI * cross(r, impulse);
+}
+inline void applyPseudoImpulseWith(RigidBody& b, const M3& invI, const V3& impulse, const V3& r) {
+    b.pseudoVelocity += impulse * b.invMass;
+    b.pseudoAngular += invI * cross(r, impulse);
+}
+
 }  // namespace
+
+void PhysicsWorld::cacheInvInertia() {
+    invInertia_.resize(bodies.size());
+    for (std::size_t i = 0; i < bodies.size(); ++i) invInertia_[i] = bodies[i].invInertiaWorld();
+}
 
 void RigidBody::setBoxInertia(float mass, const V3& h) {
     invMass = mass > 0.0f ? 1.0f / mass : 0.0f;
@@ -183,6 +201,55 @@ void PhysicsWorld::solveJoints(float dt) {
     }
     for (auto& j : joints) j.accumulated = {};
 
+    // Geometry for the whole sweep (see JointPre in Physics.h). Each value is
+    // computed with exactly the expression the loop below used to evaluate in
+    // every iteration, so nothing about the solve changes except its cost.
+    jointPre_.resize(joints.size());
+    for (std::size_t n = 0; n < joints.size(); ++n) {
+        const HingeJoint& j = joints[n];
+        const RigidBody& A = bodies[j.a];
+        const RigidBody& B = bodies[j.b];
+        const M3& ia = invInertia_[j.a];
+        const M3& ib = invInertia_[j.b];
+        JointPre& p = jointPre_[n];
+
+        p.axis = normalise(A.orientation.rotate(j.axisA));
+        p.effAxis = dot(p.axis, ia * p.axis) + dot(p.axis, ib * p.axis);
+        p.angle = jointAngle(j);
+
+        if (j.weld) {
+            const Quat want = (A.orientation * j.weldRest).normalised();
+            const Quat conjWant{want.w, -want.x, -want.y, -want.z};
+            Quat err = (conjWant * B.orientation).normalised();
+            if (err.w < 0.0f) err = {-err.w, -err.x, -err.y, -err.z};  // shortest arc
+            p.weldError = {2.0f * err.x, 2.0f * err.y, 2.0f * err.z};
+            const V3 basis[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+            for (int k = 0; k < 3; ++k) {
+                p.effWeld[k] = dot(basis[k], ia * basis[k]) + dot(basis[k], ib * basis[k]);
+            }
+        } else {
+            const V3 axA = p.axis;  // identical to normalise(A.orientation.rotate(j.axisA))
+            const V3 axB = normalise(B.orientation.rotate(j.axisB));
+            p.tangent[0] = perpendicular(axA);
+            p.tangent[1] = cross(axA, p.tangent[0]);
+            p.axisError = cross(axA, axB);
+            for (int k = 0; k < 2; ++k) {
+                const V3& t = p.tangent[k];
+                p.effTangent[k] = dot(t, ia * t) + dot(t, ib * t);
+            }
+        }
+
+        p.rA = A.orientation.rotate(j.anchorA);
+        p.rB = B.orientation.rotate(j.anchorB);
+        p.anchorError = (B.position + p.rB) - (A.position + p.rA);
+        const M3 sa = M3::skew(p.rA);
+        const M3 sb = M3::skew(p.rB);
+        M3 k = M3::diagonal(A.invMass + B.invMass, A.invMass + B.invMass,
+                            A.invMass + B.invMass);
+        k = k + (-(sa * ia * sa)) + (-(sb * ib * sb));
+        p.kOk = k.invert(p.kInv);
+    }
+
     for (int it = 0; it < params.iterations; ++it) {
         // Joints are swept in the order they were built, which is root to tip
         // along each leg. Alternating the sweep direction is the textbook way
@@ -195,6 +262,9 @@ void PhysicsWorld::solveJoints(float dt) {
             HingeJoint& j = joints[n];
             RigidBody& A = bodies[j.a];
             RigidBody& B = bodies[j.b];
+            const JointPre& p = jointPre_[n];
+            const M3& ia = invInertia_[j.a];
+            const M3& ib = invInertia_[j.b];
 
             // --- servo: drive the hinge toward its target angle ---
             //
@@ -203,13 +273,10 @@ void PhysicsWorld::solveJoints(float dt) {
             // strength: it can be made arbitrarily strong without the
             // integrator ever seeing a stiff force.
             if (j.maxTorque > 0.0f) {
-                const V3 axis = normalise(A.orientation.rotate(j.axisA));
+                const V3& axis = p.axis;
                 const float target = std::clamp(j.targetAngle, j.minAngle, j.maxAngle);
-                const float angle = jointAngle(j);
-
-                const M3 ia = A.invInertiaWorld();
-                const M3 ib = B.invInertiaWorld();
-                const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                const float angle = p.angle;
+                const float eff = p.effAxis;
                 if (eff > 1e-12f) {
                     const float relSpin =
                         dot(B.angularVelocity - A.angularVelocity, axis);
@@ -230,10 +297,8 @@ void PhysicsWorld::solveJoints(float dt) {
 
             // --- muscle: bounded contraction impulse about the hinge axis ---
             if (j.muscleTorque != 0.0f) {
-                const V3 axis = normalise(A.orientation.rotate(j.axisA));
-                const M3 ia = A.invInertiaWorld();
-                const M3 ib = B.invInertiaWorld();
-                const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                const V3& axis = p.axis;
+                const float eff = p.effAxis;
                 if (eff > 1e-12f) {
                     // The muscle delivers torque * dt of angular impulse per
                     // step, no more. Tracking what it has already delivered
@@ -264,16 +329,14 @@ void PhysicsWorld::solveJoints(float dt) {
             // range, never pulls, and its impulse is unbounded because a joint
             // stop is structural rather than muscular.
             {
-                const float angle = jointAngle(j);
+                const float angle = p.angle;
                 float violation = 0.0f;
                 if (angle < j.minAngle) violation = j.minAngle - angle;
                 else if (angle > j.maxAngle) violation = j.maxAngle - angle;
 
                 if (violation != 0.0f) {
-                    const V3 axis = normalise(A.orientation.rotate(j.axisA));
-                    const M3 ia = A.invInertiaWorld();
-                    const M3 ib = B.invInertiaWorld();
-                    const float eff = dot(axis, ia * axis) + dot(axis, ib * axis);
+                    const V3& axis = p.axis;
+                    const float eff = p.effAxis;
                     if (eff > 1e-12f) {
                         const float relSpin =
                             dot(B.angularVelocity - A.angularVelocity, axis);
@@ -319,24 +382,14 @@ void PhysicsWorld::solveJoints(float dt) {
                 // Orientation error as a rotation vector. For a unit error
                 // quaternion the vector part is half the rotation angle times
                 // the axis, so 2*xyz is the small-angle rotation vector.
-                const Quat conjA{A.orientation.w, -A.orientation.x,
-                                 -A.orientation.y, -A.orientation.z};
-                const Quat want = (A.orientation * j.weldRest).normalised();
-                const Quat conjWant{want.w, -want.x, -want.y, -want.z};
-                Quat err = (conjWant * B.orientation).normalised();
-                if (err.w < 0.0f) {  // shortest arc
-                    err = {-err.w, -err.x, -err.y, -err.z};
-                }
-                const V3 errVec{2.0f * err.x, 2.0f * err.y, 2.0f * err.z};
-                (void)conjA;
-
-                const M3 ia = A.invInertiaWorld();
-                const M3 ib = B.invInertiaWorld();
+                // (Computed once per substep, in JointPre.)
+                const V3& errVec = p.weldError;
                 const V3 relOmega = B.angularVelocity - A.angularVelocity;
 
                 const V3 basis[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-                for (const V3& t : basis) {
-                    const float eff = dot(t, ia * t) + dot(t, ib * t);
+                for (int k = 0; k < 3; ++k) {
+                    const V3& t = basis[k];
+                    const float eff = p.effWeld[k];
                     if (eff < 1e-12f) continue;
                     const float bias = params.baumgarte * invDt * dot(errVec, t);
                     const float lambda = -(dot(relOmega, t) + bias) / eff;
@@ -348,20 +401,15 @@ void PhysicsWorld::solveJoints(float dt) {
 
             // --- angular part: keep the two axes parallel ---
             if (!j.weld) {
-                const V3 axA = normalise(A.orientation.rotate(j.axisA));
-                const V3 axB = normalise(B.orientation.rotate(j.axisB));
-                const V3 t1 = perpendicular(axA);
-                const V3 t2 = cross(axA, t1);
                 // Error is how far the axes have drifted apart, measured in
-                // the two directions perpendicular to the hinge.
-                const V3 err = cross(axA, axB);
-
-                const M3 ia = A.invInertiaWorld();
-                const M3 ib = B.invInertiaWorld();
+                // the two directions perpendicular to the hinge. (Tangents,
+                // error and effective masses come from JointPre.)
+                const V3& err = p.axisError;
                 const V3 relOmega = B.angularVelocity - A.angularVelocity;
 
-                for (const V3& t : {t1, t2}) {
-                    const float eff = dot(t, ia * t) + dot(t, ib * t);
+                for (int k = 0; k < 2; ++k) {
+                    const V3& t = p.tangent[k];
+                    const float eff = p.effTangent[k];
                     if (eff < 1e-12f) continue;
                     const float bias = params.baumgarte * invDt * dot(err, t);
                     const float lambda = -(dot(relOmega, t) + bias) / eff;
@@ -373,31 +421,20 @@ void PhysicsWorld::solveJoints(float dt) {
 
             // --- linear part: keep the anchors coincident ---
             {
-                const V3 rA = A.orientation.rotate(j.anchorA);
-                const V3 rB = B.orientation.rotate(j.anchorB);
-                const V3 pA = A.position + rA;
-                const V3 pB = B.position + rB;
-                const V3 err = pB - pA;
-
-                const M3 ia = A.invInertiaWorld();
-                const M3 ib = B.invInertiaWorld();
-                const M3 sa = M3::skew(rA);
-                const M3 sb = M3::skew(rB);
-                // K = (1/mA + 1/mB) I - skew(rA) IA skew(rA) - skew(rB) IB skew(rB)
-                M3 k = M3::diagonal(A.invMass + B.invMass,
-                                    A.invMass + B.invMass,
-                                    A.invMass + B.invMass);
-                k = k + (-(sa * ia * sa)) + (-(sb * ib * sb));
-
-                M3 kInv;
-                if (!k.invert(kInv)) continue;
+                // K = (1/mA + 1/mB) I - skew(rA) IA skew(rA) - skew(rB) IB skew(rB),
+                // inverted once per substep in JointPre.
+                const V3& rA = p.rA;
+                const V3& rB = p.rB;
+                const V3& err = p.anchorError;
+                if (!p.kOk) continue;
+                const M3& kInv = p.kInv;
 
                 // Velocity constraint, with no positional bias: this impulse
                 // is pure momentum exchange and adds no energy.
                 const V3 relVel = B.pointVelocity(rB) - A.pointVelocity(rA);
                 const V3 impulse = kInv * (-relVel);
-                A.applyImpulse(-impulse, rA);
-                B.applyImpulse(impulse, rB);
+                applyImpulseWith(A, ia, -impulse, rA);
+                applyImpulseWith(B, ib, impulse, rB);
                 j.accumulated += impulse;
 
                 // Position correction, into the pseudo-velocities. These move
@@ -407,8 +444,8 @@ void PhysicsWorld::solveJoints(float dt) {
                     B.pseudoPointVelocity(rB) - A.pseudoPointVelocity(rA);
                 const V3 bias = err * (params.baumgarte * invDt);
                 const V3 pseudo = kInv * (-(pseudoRel + bias));
-                A.applyPseudoImpulse(-pseudo, rA);
-                B.applyPseudoImpulse(pseudo, rB);
+                applyPseudoImpulseWith(A, ia, -pseudo, rA);
+                applyPseudoImpulseWith(B, ib, pseudo, rB);
             }
         }
     }
@@ -468,16 +505,35 @@ void PhysicsWorld::solveContacts(float dt) {
     // the same time and each contact needs its own carried impulse.
     probeImpulse.assign(probes.size() * kPlaneCount, 0.0f);
 
+    // Contact geometry is fixed for the sweep, like the joints' (JointPre).
+    contactPre_.resize(contacts.size());
+    for (std::size_t n = 0; n < contacts.size(); ++n) {
+        const Contact& c = contacts[n];
+        const RigidBody& b = bodies[c.body];
+        const M3& ii = invInertia_[c.body];
+        ContactPre& p = contactPre_[n];
+        p.r = b.orientation.rotate(c.localPoint);
+        const V3 rn = cross(p.r, c.normal);
+        p.effN = b.invMass + dot(rn, ii * rn);
+        p.tangent[0] = perpendicular(c.normal);
+        p.tangent[1] = cross(c.normal, p.tangent[0]);
+        for (int k = 0; k < 2; ++k) {
+            const V3 rt = cross(p.r, p.tangent[k]);
+            p.effT[k] = b.invMass + dot(rt, ii * rt);
+        }
+    }
+
     for (int it = 0; it < params.iterations; ++it) {
-        for (auto& c : contacts) {
+        for (std::size_t n = 0; n < contacts.size(); ++n) {
+            Contact& c = contacts[n];
+            const ContactPre& p = contactPre_[n];
             RigidBody& b = bodies[c.body];
-            const V3 r = b.orientation.rotate(c.localPoint);
+            const M3& ii = invInertia_[c.body];
+            const V3& r = p.r;
             const V3 v = b.pointVelocity(r);
 
             // Normal: stop the point sinking, and push it back out slowly.
-            const M3 ii = b.invInertiaWorld();
-            const V3 rn = cross(r, c.normal);
-            const float effN = b.invMass + dot(rn, ii * rn);
+            const float effN = p.effN;
             if (effN < 1e-12f) continue;
 
             float lambda = -dot(v, c.normal) / effN;
@@ -487,7 +543,7 @@ void PhysicsWorld::solveContacts(float dt) {
             const float old = c.normalImpulse;
             c.normalImpulse = std::max(0.0f, old + lambda);
             lambda = c.normalImpulse - old;
-            b.applyImpulse(c.normal * lambda, r);
+            applyImpulseWith(b, ii, c.normal * lambda, r);
 
             // Push the body back out of the ground through the pseudo
             // velocities, so resting on the floor does not slowly trickle
@@ -497,25 +553,21 @@ void PhysicsWorld::solveContacts(float dt) {
                 const float pv = dot(b.pseudoPointVelocity(r), c.normal);
                 const float bias = params.baumgarte * invDt * push;
                 const float pl = std::max(0.0f, (bias - pv) / effN);
-                b.applyPseudoImpulse(c.normal * pl, r);
+                applyPseudoImpulseWith(b, ii, c.normal * pl, r);
             }
 
             // Friction, in two tangent directions, clamped by Coulomb.
-            const V3 t1 = perpendicular(c.normal);
-            const V3 t2 = cross(c.normal, t1);
-            const V3 tangents[2] = {t1, t2};
             for (int k = 0; k < 2; ++k) {
-                const V3 t = tangents[k];
+                const V3& t = p.tangent[k];
                 const V3 vv = b.pointVelocity(r);
-                const V3 rt = cross(r, t);
-                const float effT = b.invMass + dot(rt, ii * rt);
+                const float effT = p.effT[k];
                 if (effT < 1e-12f) continue;
                 float lt = -dot(vv, t) / effT;
                 const float maxT = params.friction * c.normalImpulse;
                 const float oldT = c.tangentImpulse[k];
                 c.tangentImpulse[k] = std::clamp(oldT + lt, -maxT, maxT);
                 lt = c.tangentImpulse[k] - oldT;
-                b.applyImpulse(t * lt, r);
+                applyImpulseWith(b, ii, t * lt, r);
             }
         }
     }
@@ -564,6 +616,9 @@ void PhysicsWorld::step(float dt) {
     if (dt <= 0.0f) return;
     integrateVelocities(dt);
     buildGroundContacts();
+    // Orientations are now fixed until integratePositions(): cache what the
+    // solvers derive from them.
+    cacheInvInertia();
     solveJoints(dt);
     solveContacts(dt);
     clampVelocities();

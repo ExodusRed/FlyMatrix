@@ -255,6 +255,40 @@ private:
     // Normal impulse per probe, kept between frames for warm starting.
     std::vector<float> probeImpulse;
 
+    // Per-substep solver scratch.
+    //
+    // Positions and orientations only change in integratePositions(), after
+    // the Gauss-Seidel sweep, so everything derived from them -- world-space
+    // inverse inertia, joint axes and angles, anchor arms, effective masses,
+    // the linear K matrix inverse -- is the same in all `iterations` passes.
+    // It used to be recomputed in every pass (and inside every applyImpulse).
+    // Computing it once per substep with the same expressions gives the same
+    // values, so results are bit-identical; it is purely a speed change.
+    struct JointPre {
+        V3 axis;              // hinge axis in world space (from A)
+        float effAxis = 0.0f; // effective inverse inertia about it
+        float angle = 0.0f;   // current hinge angle
+        V3 tangent[2];        // directions perpendicular to the hinge
+        float effTangent[2] = {0.0f, 0.0f};
+        V3 axisError;         // cross(axA, axB): hinge axes drifting apart
+        V3 weldError;         // rotation-vector error for welded joints
+        float effWeld[3] = {0.0f, 0.0f, 0.0f};
+        V3 rA, rB;            // anchor arms in world space
+        V3 anchorError;       // pB - pA
+        M3 kInv;              // inverse of the linear constraint matrix
+        bool kOk = false;
+    };
+    struct ContactPre {
+        V3 r;                 // contact arm in world space
+        V3 tangent[2];
+        float effN = 0.0f;
+        float effT[2] = {0.0f, 0.0f};
+    };
+    std::vector<M3> invInertia_;
+    std::vector<JointPre> jointPre_;
+    std::vector<ContactPre> contactPre_;
+    void cacheInvInertia();
+
     // Contact points are supplied by the caller each step via these.
 public:
     // Candidate contact points: body index plus a point in its local frame,
