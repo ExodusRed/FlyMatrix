@@ -28,6 +28,7 @@ add_library(flycore STATIC
   src/body/FlyPhysics.cpp
   src/body/MotorPools.cpp
   src/body/SensoryOrgans.cpp
+  src/body/WalkController.cpp
   src/engine/Physics.cpp
 )
 target_include_directories(flycore PUBLIC src)
@@ -68,7 +69,7 @@ if(EMSCRIPTEN)
     -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2
     -sALLOW_MEMORY_GROWTH=1
     -sENVIRONMENT=web
-    -sEXPORTED_FUNCTIONS=_main,_fly_jump,_fly_pause,_fly_speed,_fly_toggle,_fly_status,_fly_selftest
+    -sEXPORTED_FUNCTIONS=_main,_fly_jump,_fly_pause,_fly_speed,_fly_toggle,_fly_status,_fly_selftest,_fly_mode,_fly_walk
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
     "--preload-file=${FLY_WEB_DATA}/drive.bin@/data/drive.bin"
     "--preload-file=${FLY_WEB_DATA}/motor_map.tsv@/data/motor_map.tsv"

@@ -47,6 +47,14 @@
     .controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
     .controls input[type=range] { flex: 1; min-width: 120px; accent-color: var(--accent); }
     .controls .hint { color: var(--muted); font-size: 0.8rem; margin-left: auto; }
+    .controls .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .controls .seg button { border: 0; border-radius: 0; }
+    .controls .seg button[aria-pressed="true"] { background: var(--accent); color: #04191d; font-weight: 600; }
+    .walk-only, .jump-only { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    [hidden] { display: none !important; }
+    .controls label.speed { display: inline-flex; gap: 6px; align-items: center; font-size: 0.88rem; color: var(--muted); }
+    .controls label.speed input { width: 110px; accent-color: var(--accent); }
+    #turn-left, #turn-right { touch-action: none; user-select: none; }
 
     details.about { border-top: 1px solid var(--border); padding: 10px 16px; font-size: 0.88rem; color: #c8c8ce; }
     details.about summary { cursor: pointer; color: var(--fg); }
@@ -97,17 +105,26 @@
         <div class="loading" id="body-loading">Loading the physics engine (WebAssembly)…</div>
       </div>
       <div class="controls">
-        <button class="primary" id="body-jump">Fire giant fibre</button>
+        <span class="seg" role="group" aria-label="Mode">
+          <button id="mode-walk" aria-pressed="true">Walk</button>
+          <button id="mode-jump" aria-pressed="false">Jump</button>
+        </span>
+        <span class="walk-only">
+          <label class="speed">Speed <input type="range" id="walk-speed" min="0" max="1" step="0.05" value="1" aria-label="Walking speed"></label>
+          <button id="turn-left" aria-label="Turn left (hold)">&#9664; Left</button>
+          <button id="turn-right" aria-label="Turn right (hold)">Right &#9654;</button>
+        </span>
+        <span class="jump-only" hidden>
+          <button class="primary" id="body-jump">Fire giant fibre</button>
+          <select id="body-speed" aria-label="Slow motion">
+            <option value="0.25">0.25 ms of fly time / frame</option>
+            <option value="0.5">0.5 ms / frame</option>
+            <option value="1" selected>1 ms / frame (fastest)</option>
+          </select>
+        </span>
         <button id="body-pause">Pause</button>
-        <select id="body-speed" aria-label="Speed">
-          <option value="0.25">0.25 ms of fly time / frame</option>
-          <option value="0.5">0.5 ms / frame</option>
-          <option value="1" selected>1 ms / frame (fastest)</option>
-        </select>
-        <button id="body-ground" aria-pressed="true">Floor</button>
-        <button id="body-walls" aria-pressed="false">Walls</button>
-        <button id="body-gravity" aria-pressed="true">Gravity</button>
-        <span class="hint">Drag to orbit · right-drag to pan · scroll to zoom</span>
+        <button id="body-reset">Reset</button>
+        <span class="hint" id="body-hint">Hold Left/Right or A/D to steer · W/S speed · drag to orbit · scroll to zoom</span>
       </div>
     </section>
   </main>
@@ -126,13 +143,22 @@
       <b>Body:</b> this one is <b>live</b>. The fly's skeleton and physics (33 rigid bodies, 34 joints, contact
       and friction) are the original C++ engine compiled to WebAssembly, running in your browser one millisecond at a
       time. Its muscles are driven by the motor-neuron activity recorded from the same giant-fibre run, so the jump you see
-      emerges from the connectome rather than from an animation. It runs in slow motion because the solver is expensive:
-      even natively, one millisecond of fly time costs tens of milliseconds of computation.
+      emerges from the connectome rather than from an animation. Both modes run in slow motion because the solver is
+      expensive: one millisecond of fly time costs a few milliseconds of computation.
+    </p>
+    <p>
+      <b>Walking:</b> the same live physics, driven by a <b>central pattern generator</b>: six coupled oscillators, one
+      per leg, that settle into the alternating tripod gait real flies use, with a stance phase that pushes at constant
+      speed and a swing phase that lifts the foot. Slower walking keeps more feet down, turning shortens the inner
+      strides, and a heading hold stands in for the visual and haltere feedback a fly uses to keep its course. This
+      rhythm is a <b>modelling choice, not the connectome</b>: the wiring alone does not produce a walking rhythm in this
+      model, which is an open research question. It walks at about 10 mm/s and 20 steps per second, the slow end of a
+      real fly's 10&ndash;25 mm/s.
     </p>
     <p>
       <b>A caveat worth knowing:</b> the takeoff is very sensitive to floating-point rounding. With bit-identical muscle
-      input, the same C++ gives a peak of 2.9 mm in an optimised native build, 4.5 mm in a strict native build and
-      7.4 mm here. The nervous system and the muscle drive are deterministic; the difference arises in the contact and
+      input, the same C++ gives a peak of 2.1 mm in an optimised native build, 4.5 mm in a strict native build and
+      2.7 mm here. The nervous system and the muscle drive are deterministic; the difference arises in the contact and
       joint solver during the jump, which makes it an honest open problem of this model rather than a property of the fly.
     </p>
   </details>
@@ -231,22 +257,61 @@
       document.body.appendChild(s);
     }
     const bodyHud = document.getElementById('body-hud');
+    let bodyMode = 'walk', lastT = 0, lastClock = performance.now(), slowMo = 0;
     function updateBodyHud() {
       const s = JSON.parse(Module.ccall('fly_status', 'string', [], []));
-      const phase = s.playing ? (s.t < 20 ? '<span class="stim">GIANT FIBRE FIRING</span>' : 'muscles driven by recorded motor neurons')
-                              : 'recording finished, the fly is on its own';
-      bodyHud.innerHTML = `t = <b>${s.t} ms</b> · height <b>${s.height.toFixed(2)} mm</b> · peak ${s.peak.toFixed(2)} mm<br>${phase}`;
-      document.getElementById('body-ground').setAttribute('aria-pressed', String(s.ground));
-      document.getElementById('body-walls').setAttribute('aria-pressed', String(s.walls));
-      document.getElementById('body-gravity').setAttribute('aria-pressed', String(s.gravity));
+      // How much fly time passes per second of real time = the slow-motion factor.
+      const now = performance.now();
+      if (s.t >= lastT && now > lastClock) {
+        const rate = (s.t - lastT) / (now - lastClock);  // fly ms per real ms
+        if (rate > 0) slowMo = slowMo ? slowMo * 0.8 + (1 / rate) * 0.2 : 1 / rate;
+      }
+      lastT = s.t; lastClock = now;
+      const slow = slowMo > 1.05 ? ` · slow motion ×${slowMo.toFixed(0)}` : '';
+      if (s.mode === 'walk') {
+        const dir = s.turn > 0.05 ? ' · turning left' : s.turn < -0.05 ? ' · turning right' : '';
+        bodyHud.innerHTML = `walking <b>${s.walkSpeed.toFixed(1)} mm/s</b> · ${s.stepHz.toFixed(0)} steps/s${dir}${slow}<br>` +
+          `rhythm from a modelled pattern generator (glowing legs are in swing)`;
+      } else {
+        const phase = s.playing ? (s.t < 20 ? '<span class="stim">GIANT FIBRE FIRING</span>' : 'muscles driven by recorded motor neurons')
+                                : 'recording finished, the fly is on its own';
+        bodyHud.innerHTML = `t = <b>${s.t} ms</b> · height <b>${s.height.toFixed(2)} mm</b> · peak ${s.peak.toFixed(2)} mm${slow}<br>${phase}`;
+      }
     }
     const call = (name, ...args) => bodyReady && Module.ccall(name, null, args.map(() => 'number'), args);
+    const setMode = (m) => {
+      bodyMode = m;
+      call('fly_mode', m === 'jump' ? 1 : 0);
+      document.getElementById('mode-walk').setAttribute('aria-pressed', String(m === 'walk'));
+      document.getElementById('mode-jump').setAttribute('aria-pressed', String(m === 'jump'));
+      document.querySelector('.walk-only').hidden = m !== 'walk';
+      document.querySelector('.jump-only').hidden = m !== 'jump';
+      document.getElementById('body-hint').textContent = m === 'walk'
+        ? 'Hold Left/Right or A/D to steer · W/S speed · drag to orbit · scroll to zoom'
+        : 'Drag to orbit · right-drag to pan · scroll to zoom';
+      if (m === 'walk') sendWalk();
+    };
+    document.getElementById('mode-walk').onclick = () => setMode('walk');
+    document.getElementById('mode-jump').onclick = () => setMode('jump');
+
+    let turnHeld = 0;
+    const speedInput = document.getElementById('walk-speed');
+    const sendWalk = () => call('fly_walk', Number(speedInput.value), turnHeld);
+    speedInput.oninput = sendWalk;
+    for (const [id, dir] of [['turn-left', 1], ['turn-right', -1]]) {
+      const b = document.getElementById(id);
+      const press = (e) => { e.preventDefault(); turnHeld = dir; sendWalk(); };
+      const release = () => { if (turnHeld === dir) { turnHeld = 0; sendWalk(); } };
+      b.addEventListener('pointerdown', press);
+      b.addEventListener('pointerup', release);
+      b.addEventListener('pointerleave', release);
+      b.addEventListener('pointercancel', release);
+    }
+
     document.getElementById('body-jump').onclick = () => { call('fly_jump'); bodyPaused = false; call('fly_pause', 0); document.getElementById('body-pause').textContent = 'Pause'; };
+    document.getElementById('body-reset').onclick = () => { call('fly_jump'); if (bodyMode === 'walk') sendWalk(); };
     document.getElementById('body-pause').onclick = (e) => { bodyPaused = !bodyPaused; call('fly_pause', bodyPaused ? 1 : 0); e.target.textContent = bodyPaused ? 'Resume' : 'Pause'; };
     document.getElementById('body-speed').onchange = (e) => call('fly_speed', Number(e.target.value));
-    document.getElementById('body-ground').onclick = () => call('fly_toggle', 0);
-    document.getElementById('body-walls').onclick = () => call('fly_toggle', 1);
-    document.getElementById('body-gravity').onclick = () => call('fly_toggle', 2);
 
     if (location.hash === '#body') show('body');
   </script>

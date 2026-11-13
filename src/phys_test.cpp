@@ -7,6 +7,7 @@
 //
 //   flyphys                 run every check
 //   flyphys --trace FTi -15 print a time series for one forced joint
+//   flyphys --walk 2000 1 0 walk with the CPG controller: ms, speed, turn
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,7 @@
 
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
+#include "body/WalkController.h"
 
 using namespace fly;
 
@@ -69,6 +71,9 @@ float g_corr = -1.0f;
 float g_substep = -1.0f;
 float g_tarsus = -1.0f;
 float g_minseg = -1.0f;
+// WalkController overrides for --walk (negative = keep the default).
+float g_lift = -1.0f, g_stride = -1.0f, g_freq = -1.0f, g_duty = -1.0f;
+bool g_noHold = false;  // --no-hold: walk open loop, without heading feedback
 float g_ms = 300.0f;
 bool g_standOnly = false;
 
@@ -239,6 +244,101 @@ int traceOne(const std::string& jointName_, float drive) {
 // hind-left swing together while the other three are in stance. Within a leg,
 // ThC retracts through stance to push the body forward, and during swing CTr
 // lifts the foot clear while ThC protracts to reset it.
+// Walking with the CPG (WalkController). Like gaitTest, this is NOT
+// connectome-driven: the rhythm is a modelled pattern generator. It reports
+// what a walking result has to show to be believed -- distance and speed,
+// turning rate, posture, and how many feet carry the body.
+int walkTest(float ms, float speed, float turn) {
+    FlyBody skeleton;
+    FlyPhysics phys;
+    if (g_substep > 0.0f) phys.params.substepHz = g_substep;
+    phys.params.useManualTarget = true;
+    phys.build(skeleton);
+    if (g_iters > 0) phys.world.params.iterations = g_iters;
+
+    WalkController cpg;
+    if (g_lift >= 0.0f) cpg.params.liftRad = g_lift;
+    if (g_stride >= 0.0f) cpg.params.strideRad = g_stride;
+    if (g_freq >= 0.0f) cpg.params.maxFrequencyHz = g_freq;
+    if (g_duty >= 0.0f) cpg.params.dutyFactor = g_duty;
+    const WalkController::Command cmd{speed, turn};
+
+    auto heading = [&]() {
+        const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
+        return std::atan2(fwd.y, fwd.x);
+    };
+    const V3 start = phys.thorax().position;
+    const float startHeading = heading();
+    float prevHeading = startHeading, turned = 0.0f;
+    float worstPitch = 0.0f, worstRoll = 0.0f, minHeight = 1e9f;
+    double contactSum = 0.0;
+    int contactSamples = 0, sixDown = 0, threeOrFewer = 0;
+
+    std::printf("=== walk: CPG controller (a modelling choice, NOT the connectome) ===\n");
+    std::printf("speed %+.2f, turn %+.2f, %.0f ms\n\n", speed, turn, ms);
+    std::printf("%8s %9s %9s %9s %8s %7s %7s\n",
+                "t (ms)", "x (mm)", "y (mm)", "heading", "height", "feet", "pitch");
+
+    const int n = static_cast<int>(ms / 1000.0f / kDt);
+    for (int i = 0; i < n; ++i) {
+        const WalkController::Command steer = g_noHold ? cmd : cpg.holdHeading(kDt, cmd, heading());
+        cpg.step(kDt, steer, phys.params.manualTarget);
+        phys.step(kDt);
+        if (!std::isfinite(phys.bodyHeight())) {
+            std::printf("DIVERGED at %d ms\n", i);
+            return 2;
+        }
+        const float h = heading();
+        float dh = h - prevHeading;
+        if (dh > 3.14159265f) dh -= 6.2831853f;
+        if (dh < -3.14159265f) dh += 6.2831853f;
+        turned += dh;
+        prevHeading = h;
+
+        const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
+        const V3 left = phys.thorax().orientation.rotate({0, 1, 0});
+        worstPitch = std::max(worstPitch, std::fabs(std::asin(std::clamp(fwd.z, -1.0f, 1.0f))) * 57.2958f);
+        worstRoll = std::max(worstRoll, std::fabs(std::asin(std::clamp(left.z, -1.0f, 1.0f))) * 57.2958f);
+        minHeight = std::min(minHeight, phys.bodyHeight());
+
+        // Feet on the ground, skipping the first 200 ms while the gait ramps up.
+        int feet = 0;
+        for (const auto& c : phys.world.contacts) {
+            if (c.probe < kLegCount) ++feet;
+        }
+        if (i >= 200) {
+            contactSum += feet;
+            ++contactSamples;
+            if (feet == kLegCount) ++sixDown;
+            if (feet <= 3) ++threeOrFewer;
+        }
+        if (i % std::max(1, n / 10) == 0 || i == n - 1) {
+            const V3 p = phys.thorax().position;
+            std::printf("%8d %9.3f %9.3f %8.1f%c %8.3f %7d %7.1f\n", i, p.x - start.x,
+                        p.y - start.y, (h - startHeading) * 57.2958f, ' ',
+                        phys.bodyHeight(), feet,
+                        std::asin(std::clamp(fwd.z, -1.0f, 1.0f)) * 57.2958f);
+        }
+    }
+
+    const V3 end = phys.thorax().position;
+    const float dx = end.x - start.x, dy = end.y - start.y;
+    const float dist = std::sqrt(dx * dx + dy * dy);
+    const float secs = ms / 1000.0f;
+    std::printf("\ntravelled %.3f mm (%.2f mm/s), turned %+.1f deg (%+.1f deg/s)\n",
+                dist, dist / secs, turned * 57.2958f, turned * 57.2958f / secs);
+    std::printf("height min %.3f end %.3f mm, worst pitch %.1f deg, worst roll %.1f deg\n",
+                minHeight, phys.bodyHeight(), worstPitch, worstRoll);
+    if (contactSamples > 0) {
+        std::printf("feet down: mean %.2f, all six %.0f%% of the time, three or fewer %.0f%%\n",
+                    contactSum / contactSamples, 100.0 * sixDown / contactSamples,
+                    100.0 * threeOrFewer / contactSamples);
+    }
+    const bool upright = minHeight > 0.35f && worstPitch < 25.0f && worstRoll < 25.0f;
+    std::printf("  -> %s\n", upright ? "upright throughout" : "lost posture");
+    return upright ? 0 : 2;
+}
+
 int gaitTest(float periodMs, float amplitude) {
     FlyBody skeleton;
     FlyPhysics phys;
@@ -347,6 +447,11 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--tarsus") == 0) {
             g_tarsus = std::stof(argv[i + 1]);
         }
+        if (std::strcmp(argv[i], "--no-hold") == 0) g_noHold = true;
+        if (std::strcmp(argv[i], "--lift") == 0) g_lift = std::stof(argv[i + 1]);
+        if (std::strcmp(argv[i], "--stride") == 0) g_stride = std::stof(argv[i + 1]);
+        if (std::strcmp(argv[i], "--freq") == 0) g_freq = std::stof(argv[i + 1]);
+        if (std::strcmp(argv[i], "--duty") == 0) g_duty = std::stof(argv[i + 1]);
         if (std::strcmp(argv[i], "--minseg") == 0) {
             g_minseg = std::stof(argv[i + 1]);
         }
@@ -359,6 +464,12 @@ int main(int argc, char** argv) {
         return traceOne(argv[2], drive);
     }
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--walk") == 0) {
+            const float ms = (i + 1 < argc) ? std::stof(argv[i + 1]) : 2000.0f;
+            const float speed = (i + 2 < argc) ? std::stof(argv[i + 2]) : 1.0f;
+            const float turn = (i + 3 < argc) ? std::stof(argv[i + 3]) : 0.0f;
+            return walkTest(ms, speed, turn);
+        }
         if (std::strcmp(argv[i], "--gait") == 0) {
             const float periodMs = (i + 1 < argc) ? std::stof(argv[i + 1]) : 40.0f;
             // Radians of ThC swing, not an abstract drive number.

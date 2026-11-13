@@ -32,6 +32,7 @@
 #include "body/FlyBody.h"
 #include "body/FlyPhysics.h"
 #include "body/MotorPools.h"
+#include "body/WalkController.h"
 #include "engine/Math.h"
 #include "engine/Mesh.h"
 #include "viz/Camera.h"
@@ -195,6 +196,22 @@ struct App {
     bool dragL = false, dragR = false;
     int canvasW = 0, canvasH = 0;
 
+    // Two modes. Jump replays the recorded giant-fibre drive into the
+    // physics. Walk runs the WalkController (a modelled pattern generator,
+    // not the connectome -- see WalkController.h) live, steered by the user.
+    enum class Mode { Walk, Jump };
+    Mode mode = Mode::Walk;
+    WalkController cpg;
+    WalkController::Command walkCmd{1.0f, 0.0f};  // from the page's controls
+    float keyTurn = 0.0f;                         // from held arrow / A-D keys
+    float walkMsPerFrame = 4.0f;                  // fly ms per frame, budget permitting
+    float measuredSpeed = 0.0f;                   // mm/s, smoothed
+    V3 lastPos{};
+    // Walking uses 32 solver iterations instead of 64: flyphys --walk gives
+    // the same gait at both (and visibly worse at 16) for half the cost.
+    // The jump keeps 64, which is what it was calibrated with.
+    static constexpr int kWalkIterations = 32;
+
     App() {
         if (pools.unitCount() != drive.units) {
             throw std::runtime_error("drive.bin was recorded with a different motor map");
@@ -212,19 +229,72 @@ struct App {
     // cut short, floor on, standard gravity.
     void resetBody() {
         body.resetPose();
+        const bool walk = mode == Mode::Walk;
+        phys.params.useManualTarget = walk;
+        for (auto& leg : phys.params.manualTarget) for (float& t : leg) t = 0.0f;
         phys.build(body);
-        phys.world.params.arenaHalfX = 6.0f;
-        phys.world.params.arenaHalfY = 6.0f;
+        // A big floor for walking (the fly is recentred long before it could
+        // reach the edge, see recentre()); the usual 6 mm box for the jump.
+        const float half = walk ? 30.0f : 6.0f;
+        phys.world.params.arenaHalfX = half;
+        phys.world.params.arenaHalfY = half;
         phys.world.params.arenaHeight = 7.2f;
         phys.world.params.wallsOn = false;
+        if (walk) phys.world.params.iterations = kWalkIterations;
         pools.reset();
+        cpg.reset();
         step = 0;
         carry = 0.0f;
         peak = 0.0f;
         playing = true;
+        measuredSpeed = 0.0f;
+        lastPos = phys.thorax().position;
+        cam.target = {lastPos.x - 0.1f, lastPos.y, 0.45f};
+    }
+
+    void setMode(Mode m) {
+        mode = m;
+        resetBody();
+    }
+
+    float heading() const {
+        const V3 fwd = phys.thorax().orientation.rotate({1, 0, 0});
+        return std::atan2(fwd.y, fwd.x);
+    }
+
+    // The world is translation-invariant, so once the fly has walked a few
+    // millimetres the whole scene is shifted back by a whole number of grid
+    // squares. The floor looks identical, and the fly can walk forever.
+    void recentre() {
+        const V3 p = phys.thorax().position;
+        if (std::fabs(p.x) < 10.0f && std::fabs(p.y) < 10.0f) return;
+        const V3 shift{std::round(p.x), std::round(p.y), 0.0f};
+        for (auto& b : phys.world.bodies) b.position = b.position - shift;
+        cam.target = cam.target - shift;
+        lastPos = lastPos - shift;
+    }
+
+    void walkStep() {
+        const float dt = 0.001f;
+        WalkController::Command cmd = walkCmd;
+        cmd.turn = std::clamp(cmd.turn + keyTurn, -1.0f, 1.0f);
+        const WalkController::Command steer = cpg.holdHeading(dt, cmd, heading());
+        cpg.step(dt, steer, phys.params.manualTarget);
+        phys.step(dt);
+        ++step;
+        // Ground speed, smoothed over ~0.2 s of fly time.
+        const V3 p = phys.thorax().position;
+        const float dx = p.x - lastPos.x, dy = p.y - lastPos.y;
+        measuredSpeed += (std::sqrt(dx * dx + dy * dy) / dt - measuredSpeed) * 0.005f;
+        lastPos = p;
+        recentre();
     }
 
     void physicsStep() {
+        if (mode == Mode::Walk) {
+            walkStep();
+            return;
+        }
         if (playing && step < static_cast<int>(drive.steps)) {
             const std::uint16_t* row = &drive.data[static_cast<std::size_t>(step) * drive.units];
             for (std::uint32_t k = 0; k < drive.units; ++k) activations[k] = row[k] / 65535.0f;
@@ -240,8 +310,19 @@ struct App {
 
     void handle(const SDL_Event& ev) {
         switch (ev.type) {
+            case SDL_EVENT_KEY_UP:
+                if (ev.key.key == SDLK_LEFT || ev.key.key == SDLK_A ||
+                    ev.key.key == SDLK_RIGHT || ev.key.key == SDLK_D) keyTurn = 0.0f;
+                break;
             case SDL_EVENT_KEY_DOWN:
-                if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_R) resetBody();
+                // Walking: steer with arrows or WASD.
+                if (ev.key.key == SDLK_LEFT || ev.key.key == SDLK_A) keyTurn = 1.0f;
+                else if (ev.key.key == SDLK_RIGHT || ev.key.key == SDLK_D) keyTurn = -1.0f;
+                else if (ev.key.key == SDLK_UP || ev.key.key == SDLK_W)
+                    walkCmd.speed = std::min(1.0f, walkCmd.speed + 0.25f);
+                else if (ev.key.key == SDLK_DOWN || ev.key.key == SDLK_S)
+                    walkCmd.speed = std::max(0.0f, walkCmd.speed - 0.25f);
+                else if (ev.key.key == SDLK_SPACE || ev.key.key == SDLK_R) resetBody();
                 else if (ev.key.key == SDLK_P) paused = !paused;
                 else if (ev.key.key == SDLK_G) phys.world.params.groundOn = !phys.world.params.groundOn;
                 else if (ev.key.key == SDLK_B) phys.world.params.wallsOn = !phys.world.params.wallsOn;
@@ -294,7 +375,7 @@ struct App {
             // simulated millisecond with the network). Spend at most ~20 ms a
             // frame on it so the page stays responsive; on a slow machine the
             // fly simply moves in slower motion instead of freezing the tab.
-            carry += speed;
+            carry += mode == Mode::Walk ? walkMsPerFrame : speed;
             const double start = emscripten_get_now();
             while (carry >= 1.0f && emscripten_get_now() - start < 20.0) {
                 physicsStep();
@@ -305,6 +386,12 @@ struct App {
         phys.readPose(segments);
         body.root.position = phys.thorax().position;
         body.root.rotation = phys.thorax().orientation;
+        if (mode == Mode::Walk) {
+            // Follow the fly, eased so the camera does not inherit the bounce
+            // of every step; only the horizontal position is followed.
+            const V3 want{body.root.position.x, body.root.position.y, cam.target.z};
+            cam.target = cam.target + (want - cam.target) * 0.08f;
+        }
         draw();
     }
 
@@ -397,7 +484,12 @@ struct App {
             const V3 delta = seg.b - seg.a;
             const float len = length(delta);
             if (len < 1e-5f) continue;
-            const float glow = pools.peakActivation(static_cast<int>(seg.leg), static_cast<int>(seg.joint));
+            // Jump: glow with muscle activation. Walk: legs in swing glow, so
+            // the alternating tripod is visible at a glance.
+            const int legIdx = static_cast<int>(seg.leg);
+            const float glow = mode == Mode::Walk
+                ? (cpg.swinging(legIdx) ? 0.45f : 0.0f)
+                : pools.peakActivation(legIdx, static_cast<int>(seg.joint));
             drawPart({seg.a, aimDownZ(delta), 1.0f}, {seg.radius, seg.radius, len},
                      {0.55f, 0.45f, 0.32f}, glow, cyl);
             drawPart({seg.a, Quat{}, 1.0f},
@@ -458,15 +550,21 @@ struct App {
 
     // Status for the page, as JSON.
     std::string status() const {
-        char buf[320];
+        char buf[512];
         std::snprintf(buf, sizeof(buf),
-                      "{\"t\":%d,\"height\":%.4f,\"peak\":%.4f,\"playing\":%s,\"speed\":%g,"
-                      "\"paused\":%s,\"recordMs\":%u,\"ground\":%s,\"walls\":%s,\"gravity\":%s}",
+                      "{\"mode\":\"%s\",\"t\":%d,\"height\":%.4f,\"peak\":%.4f,\"playing\":%s,\"speed\":%g,"
+                      "\"paused\":%s,\"recordMs\":%u,\"ground\":%s,\"walls\":%s,\"gravity\":%s,"
+                      "\"walkSpeed\":%.2f,\"walkCmd\":%.2f,\"turn\":%.2f,\"stepHz\":%.1f}",
+                      mode == Mode::Walk ? "walk" : "jump",
                       step, phys.bodyHeight(), peak, playing ? "true" : "false", speed,
                       paused ? "true" : "false", drive.steps,
                       phys.world.params.groundOn ? "true" : "false",
                       phys.world.params.wallsOn ? "true" : "false",
-                      phys.world.params.gravity.z != 0.0f ? "true" : "false");
+                      phys.world.params.gravity.z != 0.0f ? "true" : "false",
+                      measuredSpeed, walkCmd.speed, std::clamp(walkCmd.turn + keyTurn, -1.0f, 1.0f),
+                      std::fabs(cpg.speed()) < 1e-3f ? 0.0f
+                          : cpg.params.minFrequencyHz +
+                            (cpg.params.maxFrequencyHz - cpg.params.minFrequencyHz) * std::fabs(cpg.speed()));
         return buf;
     }
 };
@@ -487,6 +585,16 @@ void tick() {
 // Called from the page's buttons.
 extern "C" {
 EMSCRIPTEN_KEEPALIVE void fly_jump() { if (g_app) g_app->resetBody(); }
+// 0 = walk, 1 = jump.
+EMSCRIPTEN_KEEPALIVE void fly_mode(int m) {
+    if (g_app) g_app->setMode(m == 1 ? App::Mode::Jump : App::Mode::Walk);
+}
+// Walking command from the page: speed 0..1, turn -1..1 (positive = left).
+EMSCRIPTEN_KEEPALIVE void fly_walk(float speed, float turn) {
+    if (!g_app) return;
+    g_app->walkCmd.speed = std::clamp(speed, 0.0f, 1.0f);
+    g_app->walkCmd.turn = std::clamp(turn, -1.0f, 1.0f);
+}
 EMSCRIPTEN_KEEPALIVE void fly_pause(int p) { if (g_app) g_app->paused = p != 0; }
 EMSCRIPTEN_KEEPALIVE void fly_speed(float s) { if (g_app) g_app->speed = std::clamp(s, 0.125f, 1.0f); }
 EMSCRIPTEN_KEEPALIVE void fly_toggle(int what) {
@@ -503,6 +611,8 @@ EMSCRIPTEN_KEEPALIVE void fly_toggle(int what) {
 EMSCRIPTEN_KEEPALIVE const char* fly_selftest() {
     static std::string s;
     if (!g_app) return "{}";
+    const auto previous = g_app->mode;
+    g_app->mode = App::Mode::Jump;  // the self-test checks the recorded jump
     g_app->resetBody();
     const double t0 = emscripten_get_now();
     for (std::uint32_t i = 0; i < g_app->drive.steps; ++i) g_app->physicsStep();
@@ -510,6 +620,7 @@ EMSCRIPTEN_KEEPALIVE const char* fly_selftest() {
     char buf[200];
     std::snprintf(buf, sizeof(buf), "{\"steps\":%u,\"peak\":%.4f,\"final\":%.4f,\"msPerStep\":%.3f}",
                   g_app->drive.steps, g_app->peak, g_app->phys.bodyHeight(), ms / g_app->drive.steps);
+    g_app->mode = previous;
     g_app->resetBody();
     s = buf;
     return s.c_str();

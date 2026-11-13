@@ -961,3 +961,95 @@ mount, where the real joint is a ball-and-socket with three degrees of freedom
 (yaw, pitch, roll). The proboscis is drawn retracted and cannot extend, so the
 fly has mouthparts but still cannot feed. Wings and halteres are drawn and
 carry no mass and do not articulate.
+
+---
+
+## 12. Walking with a pattern generator, and a faster solver
+
+Finding 9 left walking with a working body, a working command layer and no
+rhythm, and said anything added to produce one is a modelling choice. This is
+that choice, made explicitly: `WalkController`, a central pattern generator of
+the kind NeuroMechFly v2 uses. **It is not connectome-driven walking.**
+
+### The solver was doing 64 times the necessary geometry
+
+Before walking could be tuned it had to be affordable. 2.0 s of `flyphys
+--gait` took 142 s. Positions and orientations only change in
+`integratePositions`, after the Gauss-Seidel sweep, but every one of the 64
+iterations recomputed what depends on them: world-space inverse inertia (also
+inside every `applyImpulse`), joint axes and angles (atan2), anchor arms,
+effective masses, and a 3x3 inversion per joint. Computing those once per
+substep changes nothing about the solve:
+
+```
+                         old        new
+RelWithDebInfo output    21.386 mm  21.386 mm   byte-identical, every line
+Release, 2.0 s of gait   142 s      17 s
+```
+
+With `/fp:fast` the Release output moves (16.64 to 17.20 mm), because the
+compiler is free to reorder arithmetic and the solver amplifies the last bit.
+That sensitivity is real and large -- the giant fibre jump peaks at 2.14 mm
+(Release), 4.46 mm (strict) and 2.70 mm (WebAssembly) from bit-identical drive
+-- and worth fixing at the source before any single jump or walking figure is
+quoted to three places.
+
+A 64-bit build is another ~18% faster than the 32-bit one in `build/`.
+
+### The controller
+
+- **Rhythm:** six phase oscillators coupled towards the alternating tripod
+  (front_L, middle_R, hind_L against the rest). Knock a leg out of phase and
+  the coupling pulls it back.
+- **Step shape:** stance retracts ThC at constant angular speed, so the foot
+  pushes at a steady rate; swing protracts with easing and lifts CTr. The
+  imposed gait used `sin` for both, which spends half of stance nearly still
+  and lifts too little: it scuffed (finding 8).
+- **Speed:** frequency 6-20 Hz with command, stride 60-100%. Slower walking
+  raises the duty factor and lowers the lift -- the move from tripod towards
+  tetrapod coordination real flies make. Without it a slow swing held three
+  legs high for long enough to tip the fly over.
+- **Turning:** inner strides shorter, outer longer, capped at +/-50%.
+- **Heading hold:** a stand-in for visual (optomotor) and haltere feedback,
+  which the body does not have. Without it "straight" walking wandered up to
+  100 degrees in 1.5 s.
+
+ThC sign, for the record: **negative ThC protracts.** The first version had it
+the other way round.
+
+### How the parameters were chosen
+
+`flyphys --walk <ms> <speed> <turn>` with `--lift --stride --freq --duty`, 1-2 s
+per run, judged on staying upright *in all three of straight, left and right*
+and on turning the commanded way -- several settings walked fast and straight
+but turned the wrong way or fell on a turn:
+
+```
+duty  lift   straight            left                right
+0.55  1.0    12.2 mm/s           --                  --          fell on turns
+0.60  0.8     8.2 mm/s  ok       -20 deg/s  WRONG    +31 deg/s  WRONG
+0.65  0.9    10.8 mm/s  ok       +24 deg/s  ok        -2 deg/s  barely turns
+0.65  0.8     9.7 mm/s  ok       +27 deg/s  ok       -15 deg/s  ok       <- shipped
+```
+
+At 20 Hz, 9-11 mm/s, upright, with about 40-50% of the time on three feet or
+fewer. That is the slow end of the 10-25 mm/s a real fly walks at.
+
+**32 solver iterations walk as well as 64** (straight 9.2 mm/s, turns +/-35
+deg/s, both correct) at 2.8 s per simulated second instead of 4.8. 16 does
+not: speed halves as the feet slip. Walking uses 32; the jump keeps 64,
+which is what it was calibrated with.
+
+### Still open
+
+- **Backward walking does not work.** Reversing the stroke moves the fly
+  *forward* at 3-6 mm/s. The front legs rest near their protraction limit,
+  so the reversed stance has little room to push; it needs its own
+  trajectory, which is also what MDN-driven backward walking would need.
+- **Not connected to the nervous system yet.** The obvious next step, and the
+  reason the controller takes speed and turn rather than a period: descending
+  neurons (e.g. DNa01/DNa02 for turning, MDN for backward) setting those
+  commands, so the brain decides and the pattern generator executes.
+- **Torque, not position.** The controller commands joint angles to the
+  posture servos (finding 8's position control). The neural path drives
+  torque; walking under torque control remains strictly harder.

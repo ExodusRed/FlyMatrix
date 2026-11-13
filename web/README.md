@@ -33,9 +33,9 @@ though. Fed that identical drive, the same solver code peaks at:
 
 | build | peak height |
 |---|---:|
-| native Release (MSVC `/fp:fast`) | 2.89 mm |
-| native RelWithDebInfo (strict FP) | 4.46 mm |
-| WebAssembly (Clang, strict FP, musl libm) | 7.38 mm |
+| native Release (MSVC `/fp:fast`) | 2.14 mm (2.89 before the solver speed-up) |
+| native RelWithDebInfo (strict FP) | 4.46 mm (unchanged: that build is bit-identical) |
+| WebAssembly (Clang, strict FP, musl libm) | 2.70 mm (7.38 before) |
 
 Last-bit differences in the contact and joint solve during takeoff grow into a
 different jump, which is worth knowing before quoting any single jump height
@@ -44,9 +44,23 @@ spread). `flyrecord` prints its native reference; in the browser,
 `Module.ccall('fly_selftest', 'string', [], [])` replays the full recording
 headlessly and returns the peak and the cost per physics step.
 
-It is also slow, natively as well as here: `flybody --drop 400` takes ~40 s,
-so the page plays the jump in slow motion (at most 1 ms of fly time a frame,
-with a ~20 ms CPU budget per frame so the tab stays responsive).
+The solver speed-up (per-substep geometry computed once instead of in all 64
+iterations, bit-identical without fast-math) moved the fast-math figures,
+which is the sensitivity again rather than a change in the physics.
+
+It is still not real time: about 6 ms of computation per simulated ms in the
+browser for the jump (64 solver iterations), less for walking (32), so both
+play in slow motion with a ~20 ms CPU budget per frame to keep the tab
+responsive.
+
+## Walking
+
+The Walk mode (the default on the Body tab) drives the same live physics with
+`WalkController`: six coupled phase oscillators locked into an alternating
+tripod, a constant-speed stance stroke and a lifted swing, duty factor and lift
+that change with speed, turning by stride asymmetry, and a heading hold. The
+rhythm is a modelling choice, not the connectome -- see `docs/findings.md`
+section 12 for why, how the parameters were chosen and what it measures.
 
 ## Rebuilding
 
